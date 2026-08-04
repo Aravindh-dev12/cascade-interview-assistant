@@ -1,0 +1,39 @@
+import sys
+import os
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from dotenv import load_dotenv
+
+from ui.overlay_window import OverlayWindow
+
+def main():
+    # Load .env file if it exists to fetch default API keys
+    load_dotenv()
+    
+    # Configure High DPI scaling behavior
+    os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+    
+    # Initialize PySide6 QApplication
+    app = QApplication(sys.argv)
+    
+    # Set application-wide metadata
+    app.setApplicationName("quntumnintent")
+    app.setOrganizationName("CopilotAI")
+    
+    # Create the floating overlay window
+    window = OverlayWindow()
+    window.show()
+    
+    # Force the window to stay on top initially
+    window.raise_()
+    window.activateWindow()
+    
+    print("[main] quntumnintent running.")
+    print("Press Ctrl+Shift+S globally to Capture Region & Answer.")
+    print("Press Ctrl+Shift+A globally to Toggle Voice Listening.")
+    
+    # Run application main event loop
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

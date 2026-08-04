@@ -1,0 +1,105 @@
+/* Canopy - Your Silent Interview Wingman */
+
+html { scroll-behavior: smooth; }
+
+.gradient-text {
+    background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.feature-card {
+    transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.feature-card:hover {
+    transform: translateY(-4px);
+    border-color: rgba(139, 92, 246, 0.25);
+    box-shadow: 0 20px 40px rgba(139, 92, 246, 0.08);
+}
+
+.pricing-card {
+    transition: all 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.pricing-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+}
+.pricing-card.popular:hover {
+    transform: translateY(-8px);
+}
+
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item[open] summary { color: #8b5cf6; }
+.faq-item summary span:last-child { transition: transform 0.2s; }
+.faq-item[open] summary span:last-child { transform: rotate(180deg); }
+
+@keyframes fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+    animation: fade-in 0.3s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+
+/* Scrollbar - ultra thin and subtle */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }
+
+/* Dashboard styles */
+.status-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.status-idle { background: #4a5568; }
+.status-listening { background: #48bb78; animation: pulse 2s ease-in-out infinite; }
+.status-error { background: #fc8181; }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.9); }
+}
+
+.code-block {
+    background: rgba(19, 19, 31, 0.6);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+    transition: all 0.2s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.btn-primary:hover {
+    opacity: 0.92;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(139, 92, 246, 0.25);
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, #e53e3e, #fc8181);
+    transition: all 0.2s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.btn-danger:hover {
+    opacity: 0.92;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(229, 62, 62, 0.2);
+}
+
+/* Input focus ring */
+input:focus, select:focus, textarea:focus {
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+}
+
+/* Smooth transitions for all interactive elements */
+button, a, select, input {
+    transition: all 0.15s cubic-bezier(0.19, 1, 0.22, 1);
+}

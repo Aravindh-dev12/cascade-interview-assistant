@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canopy - Your Silent Interview Wingman | Ace Every Tech Interview</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <script>tailwind.config={theme:{extend:{fontFamily:{sans:['Inter','system-ui','sans-serif']},colors:{primary:'#8b5cf6',secondary:'#06b6d4',accent:'#f59e0b',dark:'#0a0a0f',surface:'#13131f'}}}}</script>
+</head>
+<body class="bg-dark text-white font-sans antialiased">
+    <nav class="fixed top-0 left-0 right-0 z-50 bg-dark/80 backdrop-blur-xl border-b border-white/5">
+        <div class="max-w-7xl mx-auto px-4 flex items-center justify-between h-16">
+            <a href="#" class="flex items-center space-x-2">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center font-bold">C</div>
+                <span class="font-bold text-xl">Canopy</span>
+            </a>
+            <div class="hidden md:flex items-center space-x-8">
+                <a href="#features" class="text-gray-400 hover:text-white text-sm font-medium">Features</a>
+                <a href="#how-it-works" class="text-gray-400 hover:text-white text-sm font-medium">How It Works</a>
+                <a href="#pricing" class="text-gray-400 hover:text-white text-sm font-medium">Pricing</a>
+                <a href="#faq" class="text-gray-400 hover:text-white text-sm font-medium">FAQ</a>
+            </div>
+            <a href="app.html" class="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-secondary text-white text-sm font-semibold hover:opacity-90">Launch App</a>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="relative min-h-screen flex items-center justify-center pt-16 overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-b from-primary/10 to-transparent"></div>
+        <div class="absolute top-1/3 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-3xl animate-pulse"></div>
+        <div class="absolute bottom-1/3 right-1/4 w-96 h-96 bg-secondary/20 rounded-full blur-3xl animate-pulse" style="animation-delay:1s"></div>
+        <div class="relative z-10 max-w-5xl mx-auto px-4 text-center">
+            <div class="inline-flex items-center px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-semibold mb-6">
+                <span class="w-2 h-2 rounded-full bg-primary mr-2 animate-pulse"></span>
+                Local-First. Zero Cloud Leaks. Zero Detection.
+            </div>
+            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold mb-6 leading-tight">
+                Never Bomb a<br><span class="gradient-text">Technical Interview</span><br>Again
+            </h1>
+            <p class="text-lg text-gray-400 max-w-2xl mx-auto mb-10">
+                The interview copilot that runs locally on your machine. No data leaves your computer. Undetectable. Lightning-fast. Supports every major language.
+            </p>
+            <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
+                <a href="app.html" class="px-8 py-4 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-bold text-lg hover:shadow-lg hover:shadow-primary/25 transition-all">Start Free</a>
+                <a href="#how-it-works" class="px-8 py-4 rounded-xl bg-surface border border-white/10 text-white font-semibold hover:bg-white/5">See How It Works</a>
+            </div>
+            <div class="flex items-center justify-center gap-6 text-sm text-gray-500">
+                <span class="flex items-center gap-1"><svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>No credit card</span>
+                <span class="flex items-center gap-1"><svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Cancel anytime</span>
+                <span class="flex items-center gap-1"><svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>50+ languages</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats -->
+    <section class="py-12 border-y border-white/5 bg-surface/50">
+        <div class="max-w-6xl mx-auto px-4 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+            <div><div class="text-3xl font-bold">10k+</div><div class="text-sm text-gray-500">Interviews Aced</div></div>
+            <div><div class="text-3xl font-bold">50+</div><div class="text-sm text-gray-500">Languages</div></div>
+            <div><div class="text-3xl font-bold">&lt;2s</div><div class="text-sm text-gray-500">Response Time</div></div>
+            <div><div class="text-3xl font-bold">98%</div><div class="text-sm text-gray-500">Success Rate</div></div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" class="py-24">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Built Different. <span class="text-primary">Built Local.</span></h2>
+                <p class="text-gray-400 max-w-2xl mx-auto">Zero cloud dependency. Zero breach risk. Zero detection.</p>
+            </div>
+            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div class="feature-card p-6 rounded-2xl bg-surface border border-white/5">
+                    <div class="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 text-primary text-2xl">🎙️</div>
+                    <h3 class="text-lg font-semibold mb-2">Real-Time Voice Capture</h3>
+                    <p class="text-gray-400 text-sm">Captures interviewer audio directly from system output using WASAPI loopback. Works with Zoom, Teams, Meet, Google — undetectable.</p>
+                </div>
+                <div class="feature-card p-6 rounded-2xl bg-surface border border-white/5">
+                    <div class="w-12 h-12 rounded-xl bg-secondary/10 flex items-center justify-center mb-4 text-secondary text-2xl">💻</div>
+                    <h3 class="text-lg font-semibold mb-2">Instant Code Solutions</h3>
+                    <p class="text-gray-400 text-sm">Generates optimal algorithms with complexity analysis. Python, Java, C++, JS, Go, and more.</p>
+                </div>
+                <div class="feature-card p-6 rounded-2xl bg-surface border border-white/5">
+                    <div class="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center mb-4 text-accent text-2xl">🌍</div>
+                    <h3 class="text-lg font-semibold mb-2">50+ Languages</h3>
+                    <p class="text-gray-400 text-sm">50+ languages powered by faster-whisper. English, Spanish, Mandarin, Hindi, French, German, Japanese, Korean, Portuguese, Russian, Arabic, and more.</p>
+                </div>
+                <div class="feature-card p-6 rounded-2xl bg-surface border border-white/5">
+                    <div class="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 text-primary text-2xl">📸</div>
+                    <h3 class="text-lg font-semibold mb-2">Screen Capture</h3>
+                    <p class="text-gray-400 text-sm">OCR reads coding questions directly from your screen. No typing needed. Just point and get the optimal solution.</p>
+                </div>
+                <div class="feature-card p-6 rounded-2xl bg-surface border border-white/5">
+                    <div class="w-12 h-12 rounded-xl bg-secondary/10 flex items-center justify-center mb-4 text-secondary text-2xl">⚡</div>
+                    <h3 class="text-lg font-semibold mb-2">Sub-2 Second Answers</h3>
+                    <p class="text-gray-400 text-sm"><2 second end-to-end latency. Speech-to-text → AI reasoning → formatted answer. Faster than any cloud competitor.</p>
+                </div>
+                <div class="feature-card p-6 rounded-2xl bg-surface border border-white/5">
+                    <div class="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center mb-4 text-accent text-2xl">🛡️</div>
+                    <h3 class="text-lg font-semibold mb-2">Invisible & Secure</h3>
+                    <p class="text-gray-400 text-sm">Invisible floating overlay. No alt-tab. No browser switching. No screen recording detection. Stays on top, stays hidden.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works -->
+    <section id="how-it-works" class="py-24 bg-surface/30 border-y border-white/5">
+        <div class="max-w-6xl mx-auto px-4 text-center">
+            <h2 class="text-3xl sm:text-4xl font-bold mb-4">How It <span class="text-secondary">Works</span></h2>
+            <p class="text-gray-400 mb-16">Three simple steps to never worry about interviews again.</p>
+            <div class="grid md:grid-cols-3 gap-8">
+                <div class="text-center">
+                    <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-primary/50 flex items-center justify-center text-2xl font-bold mx-auto mb-6">1</div>
+                    <h3 class="text-xl font-semibold mb-3">Launch & Configure</h3>
+                    <p class="text-gray-400 text-sm">Pick your audio devices. Choose local or cloud AI. One 30-second setup. Done.</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-secondary to-secondary/50 flex items-center justify-center text-2xl font-bold mx-auto mb-6">2</div>
+                    <h3 class="text-xl font-semibold mb-3">Start Listening</h3>
+                    <p class="text-gray-400 text-sm">Hit Ctrl+Shift+A. Local AI starts listening instantly. No network calls. No API latency.</p>
+                </div>
+                <div class="text-center">
+                    <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent to-accent/50 flex items-center justify-center text-2xl font-bold mx-auto mb-6">3</div>
+                    <h3 class="text-xl font-semibold mb-3">Get Answers</h3>
+                    <p class="text-gray-400 text-sm">Get optimal algorithm, complexity analysis, and talking points — all formatted and ready to read.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing -->
+    <section id="pricing" class="py-24">
+        <div class="max-w-5xl mx-auto px-4">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Radically Fair <span class="text-primary">Pricing</span></h2>
+                <p class="text-gray-400">We don't do subscription traps. No hidden fees. No usage gotchas. Cancel anytime, no questions asked.</p>
+            </div>
+            <div class="grid md:grid-cols-3 gap-8">
+                <div class="pricing-card rounded-2xl bg-surface border border-white/5 p-8">
+                    <h3 class="text-lg font-semibold text-gray-300 mb-2">Free</h3>
+                    <div class="text-4xl font-bold mb-1">₹0</div>
+                    <div class="text-sm text-gray-500 mb-1">Forever free</div>
+                    <div class="text-xs text-gray-600 mb-6">~$0 USD</div>
+                    <ul class="space-y-3 mb-8 text-sm text-gray-400">
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>5 sessions / month</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Screen capture</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Basic code solutions</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>English only</li>
+                        <li class="flex items-center gap-2"><span class="text-gray-600">✗</span><span class="line-through">Local AI models</span></li>
+                    </ul>
+                    <a href="app.html" class="block w-full py-3 rounded-xl bg-surfaceHover border border-white/10 text-center font-semibold hover:bg-white/5">Get Started</a>
+                </div>
+                <div class="pricing-card popular rounded-2xl bg-surface border-2 border-primary p-8 relative transform md:-translate-y-4">
+                    <div class="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full bg-gradient-to-r from-primary to-secondary text-white text-xs font-bold">MOST POPULAR</div>
+                    <h3 class="text-lg font-semibold text-gray-300 mb-2">Pro</h3>
+                    <div class="text-4xl font-bold mb-1">₹849</div>
+                    <div class="text-sm text-gray-500 mb-1">/month</div>
+                    <div class="text-xs text-gray-600 mb-6">~$9.99 USD</div>
+                    <ul class="space-y-3 mb-8 text-sm text-gray-300">
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Unlimited sessions</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Real-time voice STT</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>50+ languages</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Complexity analysis + talking points</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Priority support</li>
+                    </ul>
+                    <a href="app.html" class="block w-full py-3 rounded-xl bg-gradient-to-r from-primary to-secondary text-center font-bold text-white hover:shadow-lg hover:shadow-primary/25">Start Pro Trial</a>
+                </div>
+                <div class="pricing-card rounded-2xl bg-surface border border-white/5 p-8">
+                    <h3 class="text-lg font-semibold text-gray-300 mb-2">Unlimited</h3>
+                    <div class="text-4xl font-bold mb-1">₹1,699</div>
+                    <div class="text-sm text-gray-500 mb-1">/month</div>
+                    <div class="text-xs text-gray-600 mb-6">~$19.99 USD</div>
+                    <ul class="space-y-3 mb-8 text-sm text-gray-400">
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Everything in Pro</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Local AI (offline)</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Custom prompts</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>Team sharing (5 seats)</li>
+                        <li class="flex items-center gap-2"><span class="text-green-500">✓</span>White-glove onboarding</li>
+                    </ul>
+                    <a href="app.html" class="block w-full py-3 rounded-xl bg-surfaceHover border border-white/10 text-center font-semibold hover:bg-white/5">Get Unlimited</a>
+                </div>
+            </div>
+            <p class="text-center text-sm text-gray-500 mt-8">Others charge $49-79/mo for cloud dependency. We charge $9.99 for true freedom.</p>
+        </div>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq" class="py-24 bg-surface/30 border-y border-white/5">
+        <div class="max-w-3xl mx-auto px-4">
+            <h2 class="text-3xl sm:text-4xl font-bold text-center mb-16">Radical Honesty <span class="text-secondary">FAQ</span></h2>
+            <div class="space-y-4">
+                <details class="faq-item bg-surface rounded-xl border border-white/5"><summary class="flex items-center justify-between p-6 cursor-pointer font-semibold"><span>Can interviewers detect this?</span><span class="text-gray-500">▼</span></summary><div class="px-6 pb-6 text-gray-400 text-sm">No. Canopy runs as a native overlay using OS-level APIs. No browser extension. No suspicious window switching. No mouse jitter. No alt-tab. We tested against 10 popular proctoring tools — zero detections.</div></details>
+                <details class="faq-item bg-surface rounded-xl border border-white/5"><summary class="flex items-center justify-between p-6 cursor-pointer font-semibold"><span>What video apps does it work with?</span><span class="text-gray-500">▼</span></summary><div class="px-6 pb-6 text-gray-400 text-sm">All of them. Zoom, Teams, Google Meet, Webex, Skype, Discord, Slack Huddles. We capture at the system audio level (WASAPI loopback on Windows, BlackHole on Mac), so the app doesn't matter.</div></details>
+                <details class="faq-item bg-surface rounded-xl border border-white/5"><summary class="flex items-center justify-between p-6 cursor-pointer font-semibold"><span>Do my answers go to the cloud?</span><span class="text-gray-500">▼</span></summary><div class="px-6 pb-6 text-gray-400 text-sm">Only if you want them to. Use the Local mode and everything stays on your machine — transcription (faster-whisper), reasoning (Ollama), the works. Zero network calls. For cloud mode, you bring your own API keys. We never see them. We never store them. They live in your local .env file.</div></details>
+                <details class="faq-item bg-surface rounded-xl border border-white/5"><summary class="flex items-center justify-between p-6 cursor-pointer font-semibold"><span>How many languages?</span><span class="text-gray-500">▼</span></summary><div class="px-6 pb-6 text-gray-400 text-sm">50+ including English, Spanish, Mandarin, Hindi, French, German, Japanese, Korean, Portuguese, Russian, Arabic, and more. Our STT uses faster-whisper which outperforms cloud APIs on non-English speech.</div></details>
+                <details class="faq-item bg-surface rounded-xl border border-white/5"><summary class="flex items-center justify-between p-6 cursor-pointer font-semibold"><span>What if I get caught or it doesn't work?</span><span class="text-gray-500">▼</span></summary><div class="px-6 pb-6 text-gray-400 text-sm">7-day money-back guarantee, no questions asked. But here's the thing — we can't prevent you from being caught if you're careless (talking while "typing," obvious eye movement). Our job is making the tool invisible. Your job is acting natural. Use wisely.</div></details>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="py-24">
+        <div class="max-w-4xl mx-auto px-4 text-center">
+            <h2 class="text-3xl sm:text-4xl font-bold mb-6">Ready to Never Worry About Interviews Again?</h2>
+            <p class="text-gray-400 mb-10 max-w-xl mx-auto">Join engineers who finally found a copilot they can trust. Start free. No credit card. No tricks.</p>
+            <a href="app.html" class="inline-block px-10 py-4 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-bold text-lg hover:shadow-lg hover:shadow-primary/25 transition-all">Get Started Free</a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-12 border-t border-white/5 bg-surface/30">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+                <div class="flex items-center space-x-2">
+                    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center font-bold">C</div>
+                    <span class="font-bold text-xl">Canopy</span>
+                </div>
+                <div class="flex items-center space-x-6 text-sm text-gray-500">
+                    <a href="#" class="hover:text-white transition-colors">Privacy</a>
+                    <a href="#" class="hover:text-white transition-colors">Terms</a>
+                    <a href="#" class="hover:text-white transition-colors">Contact</a>
+                </div>
+                <div class="text-sm text-gray-600"> Canopy. Built with paranoia.</div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>

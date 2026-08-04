@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Canopy | Your Silent Wingman</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+    <script>tailwind.config={theme:{extend:{fontFamily:{sans:['Inter','system-ui','sans-serif'],mono:['JetBrains Mono','monospace']},colors:{primary:'#8b5cf6',secondary:'#06b6d4',accent:'#f59e0b',dark:'#0a0a0f',surface:'#13131f',surfaceHover:'#1a1a2e'}}}}</script>
+</head>
+<body class="bg-dark text-white font-sans antialiased h-screen overflow-hidden selection:bg-primary/30">
+    <!-- Top Bar -->
+    <header class="h-14 bg-dark/90 backdrop-blur border-b border-white/[0.04] flex items-center justify-between px-5 flex-shrink-0">
+        <div class="flex items-center space-x-3">
+            <a href="index.html" class="flex items-center space-x-2.5 hover:opacity-80 transition-opacity">
+                <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[10px] font-bold shadow-lg shadow-primary/20">C</div>
+                <span class="font-bold text-[15px] tracking-tight">Canopy</span>
+            </a>
+            <span class="text-gray-700 text-sm">|</span>
+            <span class="text-[11px] text-gray-500 font-medium tracking-wide uppercase">Dashboard</span>
+        </div>
+        <div class="flex items-center space-x-3">
+            <div id="sttStatus" class="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-surface border border-white/[0.04]">
+                <span id="statusDot" class="status-indicator status-idle"></span>
+                <span id="statusText" class="text-[11px] text-gray-400 font-medium tracking-wide uppercase">Idle</span>
+            </div>
+            <button id="settingsBtn" class="p-2 rounded-lg bg-surface border border-white/[0.04] hover:bg-white/5 transition-all" title="Settings">
+                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="flex h-[calc(100vh-3.5rem)]">
+        <!-- Sidebar -->
+        <aside class="w-56 bg-dark/50 border-r border-white/[0.04] flex flex-col backdrop-blur-sm">
+            <div class="p-3.5">
+                <button id="toggleListenBtn" class="w-full py-2 rounded-xl btn-primary text-white font-semibold text-[12px] flex items-center justify-center space-x-2 shadow-lg shadow-primary/10">
+                    <svg id="micIcon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                    <span id="listenBtnText">Start Listening</span>
+                </button>
+            </div>
+
+            <!-- Audio Sources -->
+            <div class="px-3.5 pb-2.5">
+                <div class="text-[9px] font-semibold text-gray-600 uppercase tracking-widest mb-2">Audio</div>
+                <div class="space-y-1">
+                    <div class="flex items-center justify-between p-2 rounded-md bg-surface/40 border border-white/[0.02]">
+                        <div class="flex items-center space-x-2">
+                            <div class="w-5 h-5 rounded bg-primary/5 flex items-center justify-center">
+                                <svg class="w-3 h-3 text-primary/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                            </div>
+                            <span class="text-[11px] text-gray-400">Mic</span>
+                        </div>
+                        <div id="micLevel" class="w-10 h-0.5 bg-gray-800 rounded-full overflow-hidden"><div class="h-full bg-green-500/70 rounded-full transition-all duration-75" style="width:0%"></div></div>
+                    </div>
+                    <div class="flex items-center justify-between p-2 rounded-md bg-surface/40 border border-white/[0.02]">
+                        <div class="flex items-center space-x-2">
+                            <div class="w-5 h-5 rounded bg-secondary/5 flex items-center justify-center">
+                                <svg class="w-3 h-3 text-secondary/50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/></svg>
+                            </div>
+                            <span class="text-[11px] text-gray-400">System</span>
+                        </div>
+                        <span class="text-[8px] text-yellow-500/60 bg-yellow-500/5 px-1 py-px rounded font-medium">Desktop</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="px-3.5 pb-2.5">
+                <div class="text-[9px] font-semibold text-gray-600 uppercase tracking-widest mb-2">Actions</div>
+                <div class="space-y-0.5">
+                    <button id="captureScreenBtn" class="w-full flex items-center space-x-2 p-1.5 rounded-md hover:bg-white/[0.02] transition-colors text-left group">
+                        <svg class="w-3 h-3 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        <span class="text-[11px] text-gray-500 group-hover:text-gray-300">Capture</span>
+                    </button>
+                    <button id="clearBtn" class="w-full flex items-center space-x-2 p-1.5 rounded-md hover:bg-white/[0.02] transition-colors text-left group">
+                        <svg class="w-3 h-3 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        <span class="text-[11px] text-gray-500 group-hover:text-gray-300">Clear</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="mt-auto p-3.5 border-t border-white/[0.04]">
+                <div class="text-[9px] font-semibold text-gray-600 uppercase tracking-widest mb-1.5">AI Provider</div>
+                <select id="providerSelect" class="w-full p-1.5 rounded-md bg-surface border border-white/[0.04] text-[11px] text-gray-300 focus:border-primary/40 focus:outline-none cursor-pointer">
+                    <option value="openrouter">OpenRouter (Cloud)</option>
+                    <option value="ollama">Ollama Local (Gemma)</option>
+                </select>
+                <div id="modelInfo" class="mt-1.5 text-[9px] text-gray-600">Uses your own API key</div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col min-w-0 bg-dark/30">
+            <!-- Transcript Area -->
+            <div id="transcriptScroll" class="flex-1 overflow-y-auto px-6 py-5 scroll-smooth">
+                <div id="transcriptArea" class="max-w-3xl mx-auto space-y-3">
+                    <div id="emptyState" class="flex flex-col items-center justify-center py-20 text-gray-600">
+                        <div class="w-12 h-12 rounded-xl bg-surface/40 border border-white/[0.03] flex items-center justify-center mb-3">
+                            <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                        </div>
+                        <p class="text-sm font-medium text-gray-500">Ready to listen</p>
+                        <p class="text-[11px] text-gray-600 mt-0.5">Click Start Listening or type a question</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Answer Area -->
+            <div id="answerArea" class="hidden border-t border-white/[0.04] bg-surface/20 backdrop-blur px-6 py-4">
+                <div class="max-w-3xl mx-auto">
+                    <div class="flex items-center space-x-2 mb-2.5">
+                        <div class="w-4 h-4 rounded bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[7px] font-bold">C</div>
+                        <span class="text-[12px] font-semibold text-primary/90">Canopy</span>
+                        <span id="answerTime" class="text-[10px] text-gray-600 ml-auto font-mono"></span>
+                    </div>
+                    <div id="answerContent" class="code-block p-3.5 rounded-xl overflow-x-auto text-gray-300 text-[13px] leading-relaxed"></div>
+                </div>
+            </div>
+
+            <!-- Input Bar -->
+            <div class="px-6 py-3.5 border-t border-white/[0.04] bg-dark/60 backdrop-blur">
+                <div class="max-w-3xl mx-auto">
+                    <div class="flex items-center space-x-2">
+                        <div class="flex-1 relative">
+                            <input id="questionInput" type="text" placeholder="Type a coding question or paste from interview..." 
+                                class="w-full px-4 py-2.5 rounded-xl bg-surface border border-white/[0.05] text-white text-[13px] placeholder-gray-600 focus:border-primary/30 focus:outline-none transition-all">
+                        </div>
+                        <button id="sendBtn" class="px-5 py-2.5 rounded-xl btn-primary text-white font-semibold text-[12px] flex items-center space-x-1.5 shadow-lg shadow-primary/10">
+                            <span>Ask</span>
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        </button>
+                    </div>
+                    <div class="flex items-center justify-between mt-2">
+                        <div class="flex items-center space-x-4 text-[10px] text-gray-600">
+                            <label class="flex items-center space-x-1 cursor-pointer hover:text-gray-500 transition-colors">
+                                <input type="checkbox" id="autoAnswerCheck" class="rounded bg-surface border-white/[0.08] text-primary focus:ring-primary/30" checked>
+                                <span>Auto-answer on speech</span>
+                            </label>
+                            <label class="flex items-center space-x-1 cursor-pointer hover:text-gray-500 transition-colors">
+                                <input type="checkbox" id="screenCheckCheck" class="rounded bg-surface border-white/[0.08] text-primary focus:ring-primary/30">
+                                <span>Auto screen capture</span>
+                            </label>
+                        </div>
+                        <span class="text-[10px] text-gray-700 font-mono">Ctrl + Enter</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="hidden fixed inset-0 z-50 bg-black/40 backdrop-blur-md flex items-center justify-center">
+        <div class="bg-surface border border-white/[0.06] rounded-2xl w-full max-w-md mx-4 shadow-2xl shadow-black/50">
+            <div class="flex items-center justify-between p-5 border-b border-white/[0.04]">
+                <h3 class="text-[14px] font-bold tracking-tight">Settings</h3>
+                <button id="closeSettings" class="p-1 rounded-lg hover:bg-white/5 transition-colors"><svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <label class="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">OpenRouter API Key</label>
+                    <input type="password" id="openrouterKey" placeholder="sk-or-..." class="w-full px-3 py-2 rounded-lg bg-dark border border-white/[0.06] text-[12px] text-white placeholder-gray-700 focus:border-primary/40 focus:outline-none transition-colors">
+                    <p class="text-[10px] text-gray-600 mt-1">Get key from <a href="https://openrouter.ai/keys" target="_blank" class="text-primary/70 hover:text-primary">openrouter.ai</a></p>
+                </div>
+                <div>
+                    <label class="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">OpenRouter Model</label>
+                    <select id="openrouterModel" class="w-full p-2 rounded-lg bg-dark border border-white/[0.06] text-[12px] text-gray-300 focus:border-primary/40 focus:outline-none cursor-pointer">
+                        <option value="google/gemma-2-9b-it:free">Gemma 2 9B (Free)</option>
+                        <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
+                        <option value="google/gemini-flash-1.5">Gemini Flash 1.5</option>
+                        <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+                        <option value="anthropic/claude-3-haiku">Claude 3 Haiku</option>
+                    </select>
+                </div>
+                <div class="border-t border-white/[0.04] pt-4">
+                    <label class="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Ollama Endpoint</label>
+                    <input type="text" id="ollamaUrl" placeholder="http://localhost:11434" value="http://localhost:11434" class="w-full px-3 py-2 rounded-lg bg-dark border border-white/[0.06] text-[12px] text-white placeholder-gray-700 focus:border-primary/40 focus:outline-none transition-colors font-mono">
+                </div>
+                <div>
+                    <label class="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Ollama Model</label>
+                    <select id="ollamaModel" class="w-full p-2 rounded-lg bg-dark border border-white/[0.06] text-[12px] text-gray-300 focus:border-primary/40 focus:outline-none cursor-pointer">
+                        <option value="gemma2">gemma2 (Gemma 2)</option>
+                        <option value="llama3.1">llama3.1 (Llama 3.1)</option>
+                        <option value="phi3">phi3 (Phi-3)</option>
+                        <option value="mistral">mistral (Mistral)</option>
+                        <option value="custom">Custom (type below)</option>
+                    </select>
+                    <input type="text" id="ollamaCustom" placeholder="Enter custom model name" class="hidden w-full mt-2 px-3 py-2 rounded-lg bg-dark border border-white/[0.06] text-[12px] text-white placeholder-gray-700 focus:border-primary/40 focus:outline-none font-mono">
+                </div>
+                <div class="border-t border-white/[0.04] pt-4">
+                    <label class="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Language</label>
+                    <select id="languageSelect" class="w-full p-2 rounded-lg bg-dark border border-white/[0.06] text-[12px] text-gray-300 focus:border-primary/40 focus:outline-none cursor-pointer">
+                        <option value="en-US">English</option>
+                        <option value="hi-IN">Hindi</option>
+                        <option value="es-ES">Spanish</option>
+                        <option value="zh-CN">Chinese</option>
+                        <option value="fr-FR">French</option>
+                        <option value="de-DE">German</option>
+                        <option value="ja-JP">Japanese</option>
+                        <option value="ko-KR">Korean</option>
+                        <option value="pt-BR">Portuguese</option>
+                        <option value="ru-RU">Russian</option>
+                        <option value="ta-IN">Tamil</option>
+                        <option value="te-IN">Telugu</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex items-center justify-end space-x-2 p-5 border-t border-white/[0.04]">
+                <button id="cancelSettings" class="px-4 py-2 rounded-lg text-[12px] text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
+                <button id="saveSettings" class="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-secondary text-white text-[12px] font-semibold hover:shadow-lg hover:shadow-primary/20 transition-all">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
