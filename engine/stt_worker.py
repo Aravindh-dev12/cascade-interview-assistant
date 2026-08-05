@@ -1,13 +1,16 @@
-import time
-import io
 import os
+import time
+
 import numpy as np
 from PySide6.QtCore import QThread, Signal
-from openai import OpenAI
+
+try:
+    import riva.client
+except ImportError:
+    riva = None
+
 
 class STTWorker(QThread):
-    # Signals to communicate with the main UI thread
-    # Format: (speaker_label, text)
     transcription_ready = Signal(str, str)
     status_updated = Signal(str)
     error_occurred = Signal(str)
@@ -15,136 +18,140 @@ class STTWorker(QThread):
     def __init__(self, audio_recorder, api_key=None):
         super().__init__()
         self.audio_recorder = audio_recorder
-        self.api_key = api_key
+        self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
         self.running = False
-        
-        # Whisper STT config
-        self.silence_threshold = 0.005  # Energy threshold (RMS) for voice activity
-        self.silence_duration_limit = 1.2  # Seconds of silence before finalizing a phrase
-        
-        # Audio accumulator buffers for VAD
-        self.mic_speech_buffer = []
-        self.system_speech_buffer = []
-        
-        # Track active speech states
-        self.mic_speech_active = False
-        self.mic_silence_start = None
-        
-        self.system_speech_active = False
-        self.system_silence_start = None
-        
-        # Minimum audio length to transcribe (seconds)
-        self.min_speech_duration = 1.0
-        
-        # Maximum audio accumulation to prevent infinite buffers if background noise is constant
+
+        # Voice activity detection / endpointing.
+        self.silence_threshold = 0.005
+        self.silence_duration_limit = 1.0
+        self.min_speech_duration = 0.6
         self.max_speech_duration = 15.0
 
-    def set_api_key(self, api_key):
-        self.api_key = api_key
+        self.mic_speech_buffer = []
+        self.system_speech_buffer = []
+        self.mic_speech_active = False
+        self.mic_silence_start = None
+        self.system_speech_active = False
+        self.system_silence_start = None
+
+        self.server = os.environ.get(
+            "NVIDIA_RIVA_SERVER", "grpc.nvcf.nvidia.com:443"
+        ).strip()
+        self.function_id = os.environ.get(
+            "NVIDIA_RIVA_FUNCTION_ID",
+            "71203149-d3b7-4460-8231-1be2543a1fca",
+        ).strip()
+        self.language_code = os.environ.get("NVIDIA_RIVA_LANGUAGE", "en-US").strip()
+
+        self._asr_service = None
+
+    def set_api_key(self, api_key=None):
+        """Refresh the NVIDIA key from the environment.
+
+        The argument is intentionally ignored so Gemini/Ollama/OpenAI provider keys
+        can never be accidentally used for speech-to-text.
+        """
+        self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
 
     def stop(self):
         self.running = False
         self.wait()
 
+    def _create_parakeet_client(self):
+        if riva is None:
+            raise RuntimeError(
+                "nvidia-riva-client is not installed. Run: pip install -U nvidia-riva-client"
+            )
+        if not self.api_key:
+            raise RuntimeError("NVIDIA_API_KEY is not configured")
+        if not self.function_id:
+            raise RuntimeError("NVIDIA_RIVA_FUNCTION_ID is not configured")
+
+        metadata = [
+            ("function-id", self.function_id),
+            ("authorization", f"Bearer {self.api_key}"),
+        ]
+        auth = riva.client.Auth(None, True, self.server, metadata)
+        return riva.client.ASRService(auth)
+
     def run(self):
         self.running = True
-        self.status_updated.emit("STT Engine Listening...")
-        
-        # Initialize OpenAI Client
-        client = None
-        if self.api_key:
-            try:
-                client = OpenAI(api_key=self.api_key)
-            except Exception as e:
-                self.error_occurred.emit(f"Failed to init OpenAI client: {e}")
-                
-        print("[stt] STT Worker thread started.")
-        
+        self.status_updated.emit("Parakeet listening...")
+
+        try:
+            self._asr_service = self._create_parakeet_client()
+            print("[stt] NVIDIA Parakeet client initialized.")
+        except Exception as exc:
+            self._asr_service = None
+            self.error_occurred.emit(f"Parakeet initialization error: {exc}")
+
         while self.running:
             if not self.audio_recorder.is_recording:
-                time.sleep(0.1)
+                time.sleep(0.05)
                 continue
-                
-            # Fetch latest audio chunks from the recorder
+
             mic_chunk, system_chunk = self.audio_recorder.get_next_audio_chunks()
-            
-            # Use current timestamp for timing VAD silence duration
-            current_time = time.time()
-            
-            # --- 1. Process Candidate (Microphone) Audio ---
+            now = time.time()
+
             if mic_chunk is not None and len(mic_chunk) > 0:
                 self._process_stream(
-                    audio_chunk=mic_chunk,
-                    speech_buffer=self.mic_speech_buffer,
-                    speech_active=self.mic_speech_active,
-                    silence_start=self.mic_silence_start,
-                    speaker_label="Candidate",
-                    client=client,
-                    current_time=current_time
+                    mic_chunk,
+                    self.mic_speech_buffer,
+                    self.mic_speech_active,
+                    self.mic_silence_start,
+                    "Candidate",
+                    now,
                 )
-                
-            # --- 2. Process Interviewer (System Loopback) Audio ---
+
             if system_chunk is not None and len(system_chunk) > 0:
                 self._process_stream(
-                    audio_chunk=system_chunk,
-                    speech_buffer=self.system_speech_buffer,
-                    speech_active=self.system_speech_active,
-                    silence_start=self.system_silence_start,
-                    speaker_label="Interviewer",
-                    client=client,
-                    current_time=current_time
+                    system_chunk,
+                    self.system_speech_buffer,
+                    self.system_speech_active,
+                    self.system_silence_start,
+                    "Interviewer",
+                    now,
                 )
-                
-            # Prevent high CPU usage
-            time.sleep(0.1)
-            
-        print("[stt] STT Worker thread stopped.")
 
-    def _process_stream(self, audio_chunk, speech_buffer, speech_active, silence_start, speaker_label, client, current_time):
-        # Calculate RMS energy of the chunk
-        rms = np.sqrt(np.mean(audio_chunk**2)) if len(audio_chunk) > 0 else 0
-        is_active_chunk = rms > self.silence_threshold
-        
-        # Update references based on speaker to modify self attributes
-        is_mic = (speaker_label == "Candidate")
-        
-        if is_active_chunk:
+            time.sleep(0.05)
+
+        print("[stt] Parakeet worker stopped.")
+
+    def _process_stream(
+        self,
+        audio_chunk,
+        speech_buffer,
+        speech_active,
+        silence_start,
+        speaker_label,
+        current_time,
+    ):
+        rms = np.sqrt(np.mean(audio_chunk ** 2)) if len(audio_chunk) else 0.0
+        active_chunk = rms > self.silence_threshold
+        is_mic = speaker_label == "Candidate"
+
+        if active_chunk:
             if not speech_active:
-                # Speech just started
                 speech_active = True
                 print(f"[stt] {speaker_label} started speaking (RMS: {rms:.4f})")
-                
-            # Append audio to buffer
             speech_buffer.append(audio_chunk)
-            
-            # Reset silence timer
             silence_start = None
-        else:
-            if speech_active:
-                # Speech was active, now silent chunk
-                speech_buffer.append(audio_chunk)
-                
-                if silence_start is None:
-                    silence_start = current_time
-                elif current_time - silence_start >= self.silence_duration_limit:
-                    # Silence limit reached, finalize and transcribe!
-                    self._finalize_and_transcribe(speech_buffer, speaker_label, client)
-                    speech_active = False
-                    silence_start = None
-            else:
-                # Just constant silence, ignore chunk to avoid giant silent files
-                pass
-                
-        # Force finalize if speech buffer gets too long (e.g. constant background noise)
-        total_samples = sum(len(c) for c in speech_buffer)
+        elif speech_active:
+            speech_buffer.append(audio_chunk)
+            if silence_start is None:
+                silence_start = current_time
+            elif current_time - silence_start >= self.silence_duration_limit:
+                self._finalize_and_transcribe(speech_buffer, speaker_label)
+                speech_active = False
+                silence_start = None
+
+        total_samples = sum(len(chunk) for chunk in speech_buffer)
         duration = total_samples / self.audio_recorder.sample_rate
         if speech_active and duration >= self.max_speech_duration:
-            print(f"[stt] {speaker_label} speech buffer reached max limit ({duration:.1f}s). Finalizing...")
-            self._finalize_and_transcribe(speech_buffer, speaker_label, client)
+            self._finalize_and_transcribe(speech_buffer, speaker_label)
             speech_active = False
             silence_start = None
 
-        # Write back updated states to class variables
         if is_mic:
             self.mic_speech_active = speech_active
             self.mic_silence_start = silence_start
@@ -152,48 +159,54 @@ class STTWorker(QThread):
             self.system_speech_active = speech_active
             self.system_silence_start = silence_start
 
-    def _finalize_and_transcribe(self, speech_buffer, speaker_label, client):
+    def _finalize_and_transcribe(self, speech_buffer, speaker_label):
         if not speech_buffer:
             return
-            
-        # Combine all chunks
+
         full_audio = np.concatenate(speech_buffer)
-        speech_buffer.clear()  # Clear for next phrase
-        
-        # Check if duration is too short to transcribe
+        speech_buffer.clear()
+
         duration = len(full_audio) / self.audio_recorder.sample_rate
         if duration < self.min_speech_duration:
             return
-            
-        print(f"[stt] Transcribing {speaker_label} segment: {duration:.1f}s")
-        
-        # Run transcription in a separate thread/task or call it synchronously inside this worker loop
-        if not client or not self.api_key:
-            # Simulation/Dry run if no API key provided
-            simulated_text = f"<{speaker_label} speech detected - Configure OpenAI API Key to transcribe>"
-            self.transcription_ready.emit(speaker_label, simulated_text)
-            return
-            
+
+        if self._asr_service is None:
+            try:
+                self.set_api_key()
+                self._asr_service = self._create_parakeet_client()
+            except Exception as exc:
+                self.error_occurred.emit(f"Parakeet unavailable: {exc}")
+                return
+
         try:
-            # Convert float32 NumPy array to WAV bytes
-            wav_bytes = self.audio_recorder.save_to_wav_bytes(full_audio, self.audio_recorder.sample_rate)
-            
-            # Convert bytes to file-like object with a name so the SDK registers the format
-            wav_file = io.BytesIO(wav_bytes)
-            wav_file.name = "audio.wav"
-            
-            # Send to Whisper API
-            response = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=wav_file,
-                response_format="text"
+            # Riva LINEAR_PCM expects raw 16-bit mono PCM, not a WAV container.
+            pcm16 = (
+                np.clip(full_audio, -1.0, 1.0) * 32767.0
+            ).astype(np.int16).tobytes()
+
+            config = riva.client.RecognitionConfig(
+                encoding=riva.client.AudioEncoding.LINEAR_PCM,
+                sample_rate_hertz=self.audio_recorder.sample_rate,
+                language_code=self.language_code,
+                max_alternatives=1,
+                enable_automatic_punctuation=True,
             )
-            
-            transcription = response.strip()
+
+            print(f"[stt] Parakeet transcribing {speaker_label}: {duration:.1f}s")
+            response = self._asr_service.offline_recognize(pcm16, config)
+
+            parts = []
+            for result in response.results:
+                if result.alternatives:
+                    text = result.alternatives[0].transcript.strip()
+                    if text:
+                        parts.append(text)
+
+            transcription = " ".join(parts).strip()
             if transcription:
                 print(f"[stt] {speaker_label}: {transcription}")
                 self.transcription_ready.emit(speaker_label, transcription)
-        except Exception as e:
-            error_msg = f"Whisper STT Error ({speaker_label}): {e}"
+        except Exception as exc:
+            error_msg = f"Parakeet STT Error ({speaker_label}): {exc}"
             print(f"[stt] {error_msg}")
             self.error_occurred.emit(error_msg)
