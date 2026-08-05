@@ -21,9 +21,15 @@ NVIDIA_BASE_URL = os.environ.get(
 
 SYSTEM_PROMPT = (
     "You are a concise technical interview practice coach. Answer the latest question "
-    "directly. For coding questions, give the optimal approach and code, then time and "
-    "space complexity. Keep the first useful lines short so they appear immediately."
+    "directly. Put the most useful answer first. For coding questions, give the core "
+    "approach and compact code, then time and space complexity. Avoid filler."
 )
+
+
+def _practice_mode_enabled():
+    return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
 
 
 class CopilotAI:
@@ -32,19 +38,18 @@ class CopilotAI:
     def __init__(self, provider="nvidia", model=TEXT_MODEL, api_key=None):
         self.provider = "nvidia"
         self.model = TEXT_MODEL
-        self.api_key = api_key or os.environ.get("NVIDIA_API_KEY", "")
+        # Never inherit Gemini/OpenAI/UI keys for NVIDIA text generation.
+        self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
         self._nvidia_client = None
 
         self.transcript_history = []
-        self.max_transcript_history = 16
+        self.max_transcript_history = 12
 
     def set_config(self, provider=None, model=None, api_key=None):
         # Text answers are intentionally locked to NVIDIA GLM-5.2.
         self.provider = "nvidia"
         self.model = TEXT_MODEL
-        refreshed_key = os.environ.get("NVIDIA_API_KEY", "")
-        if api_key and provider == "nvidia":
-            refreshed_key = api_key
+        refreshed_key = os.environ.get("NVIDIA_API_KEY", "").strip()
         if refreshed_key != self.api_key:
             self._nvidia_client = None
         self.api_key = refreshed_key
@@ -73,8 +78,8 @@ class CopilotAI:
             self._nvidia_client = OpenAI(
                 base_url=NVIDIA_BASE_URL,
                 api_key=self.api_key,
-                timeout=20.0,
-                max_retries=1,
+                timeout=15.0,
+                max_retries=0,
             )
         return self._nvidia_client
 
@@ -83,12 +88,9 @@ class CopilotAI:
         if custom_query:
             task = custom_query
         else:
-            task = (
-                "Answer the latest substantive question in this practice transcript. "
-                "If there is no clear question, summarize the key point briefly."
-            )
+            task = "Answer the latest substantive question in this practice transcript."
 
-        # Keep the context small for low time-to-first-token.
+        # Short context reduces request serialization and model prefill latency.
         prompt = f"Transcript:\n{transcript}\n\nTask:\n{task}"
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -96,21 +98,19 @@ class CopilotAI:
         ]
 
     def stream_text_answer(self, custom_query=None):
-        """Yield GLM-5.2 answer chunks as soon as NVIDIA returns them."""
+        """Yield GLM-5.2 chunks as soon as NVIDIA returns them."""
         client = self._get_nvidia_client()
         stream = client.chat.completions.create(
             model=self.model,
             messages=self._build_text_messages(custom_query),
             temperature=0.2,
             top_p=0.9,
-            max_tokens=int(os.environ.get("NVIDIA_TEXT_MAX_TOKENS", "512")),
+            max_tokens=int(os.environ.get("NVIDIA_TEXT_MAX_TOKENS", "256")),
             stream=True,
         )
 
         for chunk in stream:
-            if not getattr(chunk, "choices", None):
-                continue
-            if not chunk.choices:
+            if not getattr(chunk, "choices", None) or not chunk.choices:
                 continue
             delta = getattr(chunk.choices[0], "delta", None)
             if delta is None:
@@ -120,12 +120,23 @@ class CopilotAI:
                 yield content
 
     def generate_text_answer(self, custom_query=None):
+        # The NVIDIA request itself is streaming, which minimizes server-side
+        # buffering. The current Qt UI renders the assembled concise response.
         return "".join(self.stream_text_answer(custom_query)).strip()
 
     def generate_answer(self, image_bytes=None, custom_query=None):
         """Compatibility method used by the current UI worker."""
         if image_bytes is not None:
             return self._call_gemini_vision(image_bytes, custom_query)
+
+        # Automatic speech -> answer is allowed only in explicit practice or
+        # otherwise permitted sessions. Live transcription remains available.
+        if custom_query is None and not _practice_mode_enabled():
+            return (
+                "### Live transcription active\n\n"
+                "Automatic coaching is disabled. Set `PRACTICE_MODE=1` only for "
+                "mock interviews or sessions where AI assistance is explicitly permitted."
+            )
 
         try:
             return self.generate_text_answer(custom_query)
