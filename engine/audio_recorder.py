@@ -8,7 +8,7 @@ import wave
 import io
 
 class AudioRecorder:
-    def __init__(self, sample_rate=16000, chunk_duration=0.5):
+    def __init__(self, sample_rate=16000, chunk_duration=0.1):
         self.sample_rate = sample_rate
         self.chunk_duration = chunk_duration
         self.chunk_size = int(self.sample_rate * self.chunk_duration)
@@ -305,7 +305,7 @@ class AudioRecorder:
         system_audio = None
         if system_chunks:
             # System loopback might have multiple channels and custom samplerate
-            # Let's average channels to mono and downsample to 16000Hz for Whisper
+            # Let's average channels to mono and downsample to 16000Hz for Parakeet
             raw_sys = np.concatenate(system_chunks, axis=0)
             if self.sys_channels > 1:
                 # Average channels
