@@ -38,7 +38,6 @@ class CopilotAI:
     def __init__(self, provider="nvidia", model=TEXT_MODEL, api_key=None):
         self.provider = "nvidia"
         self.model = TEXT_MODEL
-        # Never inherit Gemini/OpenAI/UI keys for NVIDIA text generation.
         self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
         self._nvidia_client = None
 
@@ -46,7 +45,6 @@ class CopilotAI:
         self.max_transcript_history = 12
 
     def set_config(self, provider=None, model=None, api_key=None):
-        # Text answers are intentionally locked to NVIDIA GLM-5.2.
         self.provider = "nvidia"
         self.model = TEXT_MODEL
         refreshed_key = os.environ.get("NVIDIA_API_KEY", "").strip()
@@ -90,7 +88,6 @@ class CopilotAI:
         else:
             task = "Answer the latest substantive question in this practice transcript."
 
-        # Short context reduces request serialization and model prefill latency.
         prompt = f"Transcript:\n{transcript}\n\nTask:\n{task}"
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -120,17 +117,30 @@ class CopilotAI:
                 yield content
 
     def generate_text_answer(self, custom_query=None):
-        # The NVIDIA request itself is streaming, which minimizes server-side
-        # buffering. The current Qt UI renders the assembled concise response.
-        return "".join(self.stream_text_answer(custom_query)).strip()
+        """Return a useful compact answer quickly instead of waiting for a long stream."""
+        pieces = []
+        total_chars = 0
+        min_chars = int(os.environ.get("NVIDIA_FAST_MIN_CHARS", "220"))
+        hard_chars = int(os.environ.get("NVIDIA_FAST_MAX_CHARS", "900"))
+
+        for piece in self.stream_text_answer(custom_query):
+            pieces.append(piece)
+            total_chars += len(piece)
+            joined = "".join(pieces)
+
+            # Once we have a useful amount of text, return on a natural boundary.
+            if total_chars >= min_chars and joined.rstrip().endswith((".", "!", "?", "```")):
+                break
+            if total_chars >= hard_chars:
+                break
+
+        return "".join(pieces).strip()
 
     def generate_answer(self, image_bytes=None, custom_query=None):
         """Compatibility method used by the current UI worker."""
         if image_bytes is not None:
             return self._call_gemini_vision(image_bytes, custom_query)
 
-        # Automatic speech -> answer is allowed only in explicit practice or
-        # otherwise permitted sessions. Live transcription remains available.
         if custom_query is None and not _practice_mode_enabled():
             return (
                 "### Live transcription active\n\n"
