@@ -8,3 +8,4 @@ sounddevice>=0.4.6
 numpy>=1.20.0
 python-dotenv>=1.0.0
 requests>=2.31.0
+nvidia-riva-client>=2.20.0
