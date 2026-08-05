@@ -1,44 +1,56 @@
-import base64
-import os
 import io
+import os
+
 from dotenv import load_dotenv
+from openai import OpenAI
+
 load_dotenv()
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
 
-# Minimal token-optimized prompt
-SYSTEM_PROMPT = """You are a technical interview co-pilot. Provide the optimal code solution with a brief explanation. No headings, no layouts, no filler. Just code and 1-2 sentences explaining the approach. For complexity, add it inline as a comment."""
+
+TEXT_MODEL = os.environ.get("NVIDIA_TEXT_MODEL", "z-ai/glm-5.2")
+NVIDIA_BASE_URL = os.environ.get(
+    "NVIDIA_INTEGRATE_BASE_URL", "https://integrate.api.nvidia.com/v1"
+)
+
+SYSTEM_PROMPT = (
+    "You are a concise technical interview practice coach. Answer the latest question "
+    "directly. For coding questions, give the optimal approach and code, then time and "
+    "space complexity. Keep the first useful lines short so they appear immediately."
+)
+
 
 class CopilotAI:
-    def __init__(self, provider="gemini", model="gemini-2.5-flash", api_key=None):
-        self.provider = "gemini"
-        self.model = "gemini-2.5-flash"
-        
-        # Load API key with environmental fallbacks
-        self.api_key = api_key if api_key else os.environ.get("GEMINI_API_KEY", os.environ.get("GOOGLE_API_KEY", ""))
-        
-        # Transcript history storage: list of dicts: {"speaker": str, "text": str}
-        self.transcript_history = []
-        self.max_transcript_history = 30
+    """Text coaching via NVIDIA GLM-5.2, with Gemini retained only for vision."""
 
-    def set_config(self, provider, model, api_key):
-        """
-        Maintains API compatibility with the UI overlay settings dialog.
-        Always locks provider to gemini and model to gemini-2.5-flash.
-        """
-        self.provider = "gemini"
-        self.model = "gemini-2.5-flash"
-        self.api_key = api_key if api_key else os.environ.get("GEMINI_API_KEY", os.environ.get("GOOGLE_API_KEY", ""))
+    def __init__(self, provider="nvidia", model=TEXT_MODEL, api_key=None):
+        self.provider = "nvidia"
+        self.model = TEXT_MODEL
+        self.api_key = api_key or os.environ.get("NVIDIA_API_KEY", "")
+        self._nvidia_client = None
+
+        self.transcript_history = []
+        self.max_transcript_history = 16
+
+    def set_config(self, provider=None, model=None, api_key=None):
+        # Text answers are intentionally locked to NVIDIA GLM-5.2.
+        self.provider = "nvidia"
+        self.model = TEXT_MODEL
+        refreshed_key = os.environ.get("NVIDIA_API_KEY", "")
+        if api_key and provider == "nvidia":
+            refreshed_key = api_key
+        if refreshed_key != self.api_key:
+            self._nvidia_client = None
+        self.api_key = refreshed_key
 
     def add_transcript_line(self, speaker, text):
-        """
-        Adds a spoken line from Candidate or Interviewer to the running conversation history.
-        """
-        self.transcript_history.append({
-            "speaker": speaker,
-            "text": text
-        })
+        self.transcript_history.append({"speaker": speaker, "text": text})
         if len(self.transcript_history) > self.max_transcript_history:
             self.transcript_history.pop(0)
 
@@ -46,91 +58,109 @@ class CopilotAI:
         self.transcript_history.clear()
 
     def get_formatted_transcript(self):
-        """
-        Formats the current transcript history as a string.
-        """
         if not self.transcript_history:
             return "[No conversation recorded yet]"
-            
-        formatted_lines = []
-        for item in self.transcript_history:
-            formatted_lines.append(f"{item['speaker']}: {item['text']}")
-        return "\n".join(formatted_lines)
+        return "\n".join(
+            f"{item['speaker']}: {item['text']}" for item in self.transcript_history
+        )
+
+    def _get_nvidia_client(self):
+        if not self.api_key:
+            self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+        if not self.api_key:
+            raise RuntimeError("NVIDIA_API_KEY is not configured")
+        if self._nvidia_client is None:
+            self._nvidia_client = OpenAI(
+                base_url=NVIDIA_BASE_URL,
+                api_key=self.api_key,
+                timeout=20.0,
+                max_retries=1,
+            )
+        return self._nvidia_client
+
+    def _build_text_messages(self, custom_query=None):
+        transcript = self.get_formatted_transcript()
+        if custom_query:
+            task = custom_query
+        else:
+            task = (
+                "Answer the latest substantive question in this practice transcript. "
+                "If there is no clear question, summarize the key point briefly."
+            )
+
+        # Keep the context small for low time-to-first-token.
+        prompt = f"Transcript:\n{transcript}\n\nTask:\n{task}"
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
+    def stream_text_answer(self, custom_query=None):
+        """Yield GLM-5.2 answer chunks as soon as NVIDIA returns them."""
+        client = self._get_nvidia_client()
+        stream = client.chat.completions.create(
+            model=self.model,
+            messages=self._build_text_messages(custom_query),
+            temperature=0.2,
+            top_p=0.9,
+            max_tokens=int(os.environ.get("NVIDIA_TEXT_MAX_TOKENS", "512")),
+            stream=True,
+        )
+
+        for chunk in stream:
+            if not getattr(chunk, "choices", None):
+                continue
+            if not chunk.choices:
+                continue
+            delta = getattr(chunk.choices[0], "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                yield content
+
+    def generate_text_answer(self, custom_query=None):
+        return "".join(self.stream_text_answer(custom_query)).strip()
 
     def generate_answer(self, image_bytes=None, custom_query=None):
-        """
-        Generates an answer from Gemini based on transcript history and an optional screen capture.
-        """
-        transcript = self.get_formatted_transcript()
-        user_prompt = f"--- CONVERSATION TRANSCRIPT ---\n{transcript}\n\n"
-        
-        if custom_query:
-            user_prompt += f"--- CANDIDATE SPECIFIC QUERY ---\n{custom_query}\n"
-        else:
-            user_prompt += "--- TASK ---\nAnalyze the conversation and any provided image. Address the latest spoken question or the coding problem shown on screen. Provide optimal solution details.\n"
-
-        # Ensure we have resolved some API key
-        if not self.api_key:
-            self.api_key = os.environ.get("GEMINI_API_KEY", os.environ.get("GOOGLE_API_KEY", ""))
-            
-        if not self.api_key:
-            return "### 🔑 Gemini API Key Missing\n\nPlease add your `GEMINI_API_KEY` inside your `.env` file to start receiving sub-second co-pilot answers."
+        """Compatibility method used by the current UI worker."""
+        if image_bytes is not None:
+            return self._call_gemini_vision(image_bytes, custom_query)
 
         try:
-            return self._call_gemini(user_prompt, image_bytes)
-        except Exception as e:
-            return f"### ❌ Error calling Google Gemini API\n\nDetails:\n`{str(e)}`"
+            return self.generate_text_answer(custom_query)
+        except Exception as exc:
+            return f"### NVIDIA GLM-5.2 Error\n\n`{exc}`"
 
-    def _call_gemini(self, prompt, image_bytes=None):
-        """
-        Executes sub-second vision and text queries directly with Google's modern SDK (google-genai).
-        Includes progressive backoff retries exclusively on gemini-2.5-flash to bypass temporary 503/429 spikes.
-        """
-        # Initialize Google GenAI client
-        client = genai.Client(api_key=self.api_key)
-        
-        contents = [prompt]
-        if image_bytes:
-            from PIL import Image
-            # Gemini SDK handles PIL Images directly
-            pil_img = Image.open(io.BytesIO(image_bytes))
-            contents.append(pil_img)
-            
-        # Try up to 5 retries on gemini-2.5-flash with progressive backoff on 503/429 overloads
-        max_tries = 5
-        last_error = None
-        for attempt in range(max_tries):
-            try:
-                print(f"[gemini] Querying model: gemini-2.5-flash (Attempt {attempt+1}/{max_tries})...")
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.1,
-                        max_output_tokens=2048
-                    )
-                )
-                # Success!
-                return response.text
-            except Exception as e:
-                last_error = e
-                error_str = str(e).lower()
-                
-                # Check for temporary Google-side overloads (503) or rate-limits (429)
-                if "503" in error_str or "unavail" in error_str or "429" in error_str or "limit" in error_str or "exhaust" in error_str:
-                    if attempt < max_tries - 1:
-                        import time
-                        # Progressive backoff delay: 0.4s, 0.8s, 1.2s, 1.6s
-                        delay = 0.4 * (attempt + 1)
-                        print(f"[gemini] Model is temporarily busy (503/429). Retrying in {delay:.1f}s...")
-                        time.sleep(delay)
-                        continue
-                    else:
-                        print(f"[gemini] Model exhausted all {max_tries} retries.")
-                else:
-                    # Non-temporary errors (authentication, bad API key), raise immediately
-                    raise e
-                    
-        if last_error:
-            raise last_error
+    def _call_gemini_vision(self, image_bytes, custom_query=None):
+        """GLM-5.2 is text-only; retain the existing Gemini vision path."""
+        if genai is None:
+            return "### Vision unavailable\n\nInstall `google-genai` to use screen-image analysis."
+
+        gemini_key = os.environ.get(
+            "GEMINI_API_KEY", os.environ.get("GOOGLE_API_KEY", "")
+        ).strip()
+        if not gemini_key:
+            return (
+                "### Vision key missing\n\n"
+                "GLM-5.2 handles text answers. Set `GEMINI_API_KEY` only if you also "
+                "want the existing image-analysis feature."
+            )
+
+        transcript = self.get_formatted_transcript()
+        task = custom_query or "Explain the problem shown in this image for practice."
+        prompt = f"Transcript:\n{transcript}\n\nTask:\n{task}"
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(image_bytes))
+        client = genai.Client(api_key=gemini_key)
+        response = client.models.generate_content(
+            model=os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-flash"),
+            contents=[prompt, image],
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=1024,
+            ),
+        )
+        return response.text or ""
