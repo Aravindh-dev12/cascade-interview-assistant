@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from dotenv import load_dotenv
 
 from ui.overlay_window import OverlayWindow
+from utils.mouse_passthrough import MousePassthroughController
 
 def main():
     # Load .env file if it exists to fetch default API keys
@@ -23,6 +24,12 @@ def main():
     # Create the floating overlay window
     window = OverlayWindow()
     window.show()
+
+    # Windows-only selective click-through controller. Non-interactive glass
+    # regions let the underlying application own the cursor and receive clicks;
+    # title bar/buttons/inputs/resizing controls remain usable.
+    mouse_passthrough = MousePassthroughController(window)
+    window.mouse_passthrough_controller = mouse_passthrough
     
     # Force the window to stay on top initially
     window.raise_()
