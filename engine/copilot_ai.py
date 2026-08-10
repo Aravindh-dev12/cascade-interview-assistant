@@ -20,11 +20,12 @@ SYSTEM_PROMPT = (
     "You are a concise technical interview practice coach. Answer naturally in first person "
     "when the question is about the candidate's experience. Lead with the direct answer, then "
     "give 2-4 concrete supporting points. Never invent resume details, metrics, datasets, tools, "
-    "or implementation facts. For coding questions, identify constraints, give the approach and "
-    "compact correct code when the language is clear, then time and space complexity. For MCQs, "
-    "state the best option first and briefly justify it. For math, solve carefully and verify the "
-    "arithmetic. For architecture questions, reason from objective, observations, actions, state, "
-    "uncertainty, planning, feedback, evaluation, and failure modes before naming frameworks."
+    "or implementation facts. For coding questions, first reconstruct the complete problem and "
+    "constraints, then give the approach and compact correct code when the language is clear, "
+    "followed by time and space complexity. For MCQs, state the best option first and briefly "
+    "justify it. For math, solve carefully and verify arithmetic. For architecture questions, "
+    "reason from objective, observations, actions, state, uncertainty, planning, feedback, "
+    "evaluation, and failure modes before naming frameworks."
 )
 
 
@@ -46,8 +47,8 @@ def _load_interview_knowledge():
 class CopilotAI:
     """Practice answer engine supporting Gemini 2.5 Flash or OpenAI.
 
-    NVIDIA speech-to-text is handled separately by STTWorker. The interview
-    knowledge base is used only when PRACTICE_MODE is enabled.
+    NVIDIA speech-to-text is handled separately by STTWorker. Interview context
+    and multi-frame screenshot accumulation are used only in practice/permitted mode.
     """
 
     def __init__(self, provider="gemini", model=None, api_key=None):
@@ -59,6 +60,14 @@ class CopilotAI:
         self.interview_knowledge = _load_interview_knowledge()
         self.transcript_history = []
         self.max_transcript_history = 12
+
+        # Practice screenshots are kept in chronological order so a long coding
+        # problem can be captured across multiple scroll positions.
+        self.image_history = []
+        self.image_fingerprints = []
+        self.max_image_history = max(
+            1, int(os.environ.get("PRACTICE_IMAGE_CONTEXT_FRAMES", "6"))
+        )
 
     @staticmethod
     def _normalize_model(provider, model):
@@ -97,6 +106,8 @@ class CopilotAI:
 
     def clear_history(self):
         self.transcript_history.clear()
+        self.image_history.clear()
+        self.image_fingerprints.clear()
 
     def get_formatted_transcript(self):
         if not self.transcript_history:
@@ -119,13 +130,56 @@ class CopilotAI:
         if knowledge:
             parts.append(
                 "Interview practice knowledge base. Treat this as candidate/role context. "
-                "Use it when relevant but never invent facts beyond it:\n" + knowledge
+                "Use it for both common interview questions and role-specific questions when relevant, "
+                "but never invent facts beyond it:\n" + knowledge
             )
         parts.append("Conversation transcript:\n" + transcript)
         if image_task:
             parts.append("Image-analysis instructions:\n" + image_task)
         parts.append("Current task:\n" + task)
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _image_fingerprint(image_bytes):
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(image_bytes)).convert("L").resize((32, 32))
+        return bytes(image.tobytes())
+
+    @staticmethod
+    def _fingerprint_distance(left, right):
+        if not left or not right or len(left) != len(right):
+            return 1.0
+        total = sum(abs(a - b) for a, b in zip(left, right))
+        return total / (255.0 * len(left))
+
+    def _remember_image(self, image_bytes):
+        """Add a screenshot unless it is effectively identical to the latest frame."""
+        try:
+            fingerprint = self._image_fingerprint(image_bytes)
+        except Exception:
+            fingerprint = b""
+
+        duplicate_threshold = float(
+            os.environ.get("PRACTICE_IMAGE_DUPLICATE_THRESHOLD", "0.012")
+        )
+        if self.image_fingerprints and fingerprint:
+            distance = self._fingerprint_distance(
+                self.image_fingerprints[-1], fingerprint
+            )
+            if distance <= duplicate_threshold:
+                # Replace the latest duplicate with the freshest capture without
+                # increasing the context window.
+                self.image_history[-1] = image_bytes
+                self.image_fingerprints[-1] = fingerprint
+                return len(self.image_history)
+
+        self.image_history.append(image_bytes)
+        self.image_fingerprints.append(fingerprint)
+        if len(self.image_history) > self.max_image_history:
+            self.image_history.pop(0)
+            self.image_fingerprints.pop(0)
+        return len(self.image_history)
 
     def _get_gemini_client(self):
         if not self.api_key:
@@ -149,7 +203,7 @@ class CopilotAI:
         pieces = []
         total_chars = 0
         min_chars = int(os.environ.get(min_env, "140"))
-        hard_chars = int(os.environ.get(max_env, "900"))
+        hard_chars = int(os.environ.get(max_env, "1200"))
         for piece in stream:
             if not piece:
                 continue
@@ -186,21 +240,22 @@ class CopilotAI:
         )
         return (response.output_text or "").strip()
 
-    def _openai_vision(self, image_bytes, prompt):
-        encoded = base64.b64encode(image_bytes).decode("ascii")
+    def _openai_vision(self, image_frames, prompt):
+        content = [{"type": "input_text", "text": prompt}]
+        for image_bytes in image_frames:
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{encoded}",
+                }
+            )
+
         response = self._get_openai_client().responses.create(
             model=self.model,
             instructions=SYSTEM_PROMPT,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": f"data:image/jpeg;base64,{encoded}"},
-                    ],
-                }
-            ],
-            max_output_tokens=int(os.environ.get("OPENAI_VISION_MAX_TOKENS", "1024")),
+            input=[{"role": "user", "content": content}],
+            max_output_tokens=int(os.environ.get("OPENAI_VISION_MAX_TOKENS", "1400")),
         )
         return (response.output_text or "").strip()
 
@@ -215,27 +270,43 @@ class CopilotAI:
         )
 
     def generate_vision_answer(self, image_bytes, custom_query=None):
+        frame_count = self._remember_image(image_bytes)
         image_rules = self.interview_knowledge.get("practice_image_tasks", {}) if self.interview_knowledge else {}
         image_task = "\n".join(f"- {name}: {rule}" for name, rule in image_rules.items())
+        image_task += (
+            f"\n- scrolling-context: You are receiving {frame_count} chronological screenshot frame(s) "
+            "from the same practice problem/session, oldest first and newest last. Reconstruct one complete "
+            "problem by combining text across all frames, deduplicating overlapping sections caused by scrolling. "
+            "Preserve the exact visible constraints, examples, function signature, starter code, and requested "
+            "output format. Do not treat the newest frame as a separate problem unless the content clearly changed. "
+            "If essential information is still missing, say exactly which section should be captured next instead "
+            "of guessing."
+        )
         prompt = self._build_prompt(
             custom_query or (
-                "Identify exactly what the screenshot asks, then solve it. It may be a coding problem, "
-                "HackerRank-style prompt, MCQ, mathematics problem, diagram, or system-design question. "
-                "If text is unreadable or cropped, state what is missing instead of guessing."
+                "Identify exactly what the combined screenshots ask, reconstruct the full problem across scrolls, "
+                "then solve it. It may be a HackerRank-style coding prompt, MCQ, mathematics problem, diagram, "
+                "or system-design question."
             ),
             image_task=image_task,
         )
 
+        frames = list(self.image_history)
+        print(f"[vision] Using {len(frames)} practice screenshot frame(s) as context.")
+
         if self.provider == "openai":
-            return self._openai_vision(image_bytes, prompt)
+            return self._openai_vision(frames, prompt)
 
         from PIL import Image
 
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        contents = [prompt]
+        for frame in frames:
+            contents.append(Image.open(io.BytesIO(frame)).convert("RGB"))
+
         return self._collect_fast(
             self._gemini_stream(
-                [prompt, image],
-                max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "1024")),
+                contents,
+                max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "1400")),
             ),
             "GEMINI_FAST_MIN_CHARS",
             "GEMINI_FAST_MAX_CHARS",
