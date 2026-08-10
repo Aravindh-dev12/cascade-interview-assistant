@@ -1,6 +1,8 @@
 import base64
 import io
+import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
@@ -11,12 +13,18 @@ load_dotenv()
 
 DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+KB_PATH = PROJECT_DIR / "data" / "interview_knowledge.json"
 
 SYSTEM_PROMPT = (
-    "You are a concise technical interview practice coach. Answer the latest question "
-    "directly. Put the most useful answer first. For coding questions, give the core "
-    "approach and compact code, then time and space complexity. For MCQs, state the "
-    "best option first and briefly justify it. Avoid filler."
+    "You are a concise technical interview practice coach. Answer naturally in first person "
+    "when the question is about the candidate's experience. Lead with the direct answer, then "
+    "give 2-4 concrete supporting points. Never invent resume details, metrics, datasets, tools, "
+    "or implementation facts. For coding questions, identify constraints, give the approach and "
+    "compact correct code when the language is clear, then time and space complexity. For MCQs, "
+    "state the best option first and briefly justify it. For math, solve carefully and verify the "
+    "arithmetic. For architecture questions, reason from objective, observations, actions, state, "
+    "uncertainty, planning, feedback, evaluation, and failure modes before naming frameworks."
 )
 
 
@@ -26,10 +34,20 @@ def _practice_mode_enabled():
     }
 
 
-class CopilotAI:
-    """Answer engine supporting Gemini 2.5 Flash or OpenAI.
+def _load_interview_knowledge():
+    try:
+        with open(KB_PATH, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except Exception as exc:
+        print(f"[knowledge] Could not load interview KB: {exc}")
+        return {}
 
-    NVIDIA speech-to-text is intentionally handled separately by STTWorker.
+
+class CopilotAI:
+    """Practice answer engine supporting Gemini 2.5 Flash or OpenAI.
+
+    NVIDIA speech-to-text is handled separately by STTWorker. The interview
+    knowledge base is used only when PRACTICE_MODE is enabled.
     """
 
     def __init__(self, provider="gemini", model=None, api_key=None):
@@ -38,6 +56,7 @@ class CopilotAI:
         self.api_key = self._resolve_key(self.provider, api_key)
         self._gemini_client = None
         self._openai_client = None
+        self.interview_knowledge = _load_interview_knowledge()
         self.transcript_history = []
         self.max_transcript_history = 12
 
@@ -64,11 +83,9 @@ class CopilotAI:
         next_provider = provider if provider in {"gemini", "openai"} else self.provider
         next_model = self._normalize_model(next_provider, model)
         next_key = self._resolve_key(next_provider, api_key)
-
         if next_provider != self.provider or next_key != self.api_key:
             self._gemini_client = None
             self._openai_client = None
-
         self.provider = next_provider
         self.model = next_model
         self.api_key = next_key
@@ -88,10 +105,27 @@ class CopilotAI:
             f"{item['speaker']}: {item['text']}" for item in self.transcript_history
         )
 
-    def _build_prompt(self, custom_query=None):
+    def _knowledge_context(self):
+        if not _practice_mode_enabled() or not self.interview_knowledge:
+            return ""
+        return json.dumps(self.interview_knowledge, ensure_ascii=False, indent=2)
+
+    def _build_prompt(self, custom_query=None, image_task=None):
         transcript = self.get_formatted_transcript()
-        task = custom_query or "Answer the latest substantive question in this practice transcript."
-        return f"Transcript:\n{transcript}\n\nTask:\n{task}"
+        task = custom_query or "Answer the latest substantive question in this mock interview transcript."
+        knowledge = self._knowledge_context()
+
+        parts = []
+        if knowledge:
+            parts.append(
+                "Interview practice knowledge base. Treat this as candidate/role context. "
+                "Use it when relevant but never invent facts beyond it:\n" + knowledge
+            )
+        parts.append("Conversation transcript:\n" + transcript)
+        if image_task:
+            parts.append("Image-analysis instructions:\n" + image_task)
+        parts.append("Current task:\n" + task)
+        return "\n\n".join(parts)
 
     def _get_gemini_client(self):
         if not self.api_key:
@@ -114,9 +148,8 @@ class CopilotAI:
     def _collect_fast(self, stream, min_env, max_env):
         pieces = []
         total_chars = 0
-        min_chars = int(os.environ.get(min_env, "120"))
-        hard_chars = int(os.environ.get(max_env, "700"))
-
+        min_chars = int(os.environ.get(min_env, "140"))
+        hard_chars = int(os.environ.get(max_env, "900"))
         for piece in stream:
             if not piece:
                 continue
@@ -136,7 +169,7 @@ class CopilotAI:
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 max_output_tokens=max_tokens
-                or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "384")),
+                or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "512")),
             ),
         )
         for chunk in response:
@@ -149,7 +182,7 @@ class CopilotAI:
             model=self.model,
             instructions=SYSTEM_PROMPT,
             input=prompt,
-            max_output_tokens=int(os.environ.get("OPENAI_TEXT_MAX_TOKENS", "384")),
+            max_output_tokens=int(os.environ.get("OPENAI_TEXT_MAX_TOKENS", "512")),
         )
         return (response.output_text or "").strip()
 
@@ -163,14 +196,11 @@ class CopilotAI:
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": prompt},
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:image/jpeg;base64,{encoded}",
-                        },
+                        {"type": "input_image", "image_url": f"data:image/jpeg;base64,{encoded}"},
                     ],
                 }
             ],
-            max_output_tokens=int(os.environ.get("OPENAI_VISION_MAX_TOKENS", "768")),
+            max_output_tokens=int(os.environ.get("OPENAI_VISION_MAX_TOKENS", "1024")),
         )
         return (response.output_text or "").strip()
 
@@ -185,30 +215,39 @@ class CopilotAI:
         )
 
     def generate_vision_answer(self, image_bytes, custom_query=None):
+        image_rules = self.interview_knowledge.get("practice_image_tasks", {}) if self.interview_knowledge else {}
+        image_task = "\n".join(f"- {name}: {rule}" for name, rule in image_rules.items())
         prompt = self._build_prompt(
-            custom_query or "Solve or explain the coding, MCQ, diagram, or question shown in this image for practice."
+            custom_query or (
+                "Identify exactly what the screenshot asks, then solve it. It may be a coding problem, "
+                "HackerRank-style prompt, MCQ, mathematics problem, diagram, or system-design question. "
+                "If text is unreadable or cropped, state what is missing instead of guessing."
+            ),
+            image_task=image_task,
         )
+
         if self.provider == "openai":
             return self._openai_vision(image_bytes, prompt)
 
         from PIL import Image
 
-        image = Image.open(io.BytesIO(image_bytes))
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         return self._collect_fast(
             self._gemini_stream(
                 [prompt, image],
-                max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "768")),
+                max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "1024")),
             ),
             "GEMINI_FAST_MIN_CHARS",
             "GEMINI_FAST_MAX_CHARS",
         )
 
     def generate_answer(self, image_bytes=None, custom_query=None):
-        if custom_query is None and not _practice_mode_enabled():
+        # In normal assessment mode this app remains transcription-only.
+        if not _practice_mode_enabled():
             return (
                 "### Live transcription active\n\n"
-                "Automatic coaching is disabled. Set `PRACTICE_MODE=1` only for "
-                "mock interviews or sessions where AI assistance is explicitly permitted."
+                "Practice coaching is disabled. Set `PRACTICE_MODE=1` only for mock interviews, "
+                "practice, or sessions where AI assistance is explicitly permitted."
             )
 
         try:
