@@ -22,10 +22,7 @@ from ui.region_selector import RegionSelector
 import config
 
 
-PROVIDER_MODELS = {
-    "gemini": ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
-    "openai": ["gpt-5", "gpt-5-mini"],
-}
+GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
 
 
 class SettingsDialog(QDialog):
@@ -62,32 +59,31 @@ class SettingsDialog(QDialog):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(15)
 
-        ai_group = QGroupBox("Answer Provider")
+        ai_group = QGroupBox("Gemini Answer Configuration")
         ai_layout = QFormLayout()
 
-        self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["gemini", "openai"])
-        self.provider_combo.setCurrentText(self.settings.get("provider", "gemini"))
-        self.provider_combo.currentTextChanged.connect(self._provider_changed)
-
         self.model_combo = QComboBox()
+        self.model_combo.addItems(GEMINI_MODELS)
+        current_model = self.settings.get("model", "gemini-2.5-flash")
+        index = self.model_combo.findText(current_model)
+        self.model_combo.setCurrentIndex(index if index >= 0 else 0)
 
         self.key_input = QLineEdit()
         self.key_input.setEchoMode(QLineEdit.Password)
         self.key_input.setText(self.settings.get("api_key", ""))
+        self.key_input.setPlaceholderText("Blank = use GEMINI_API_KEY from .env")
 
-        self.show_key_check = QCheckBox("Show API Key")
+        self.show_key_check = QCheckBox("Show Gemini API Key")
         self.show_key_check.stateChanged.connect(self.toggle_key_visibility)
 
-        ai_layout.addRow("Provider:", self.provider_combo)
+        ai_layout.addRow("Provider:", QLabel("Gemini only"))
         ai_layout.addRow("Model:", self.model_combo)
-        ai_layout.addRow("API Key:", self.key_input)
+        ai_layout.addRow("Gemini API Key:", self.key_input)
         ai_layout.addRow("", self.show_key_check)
         ai_group.setLayout(ai_layout)
         main_layout.addWidget(ai_group)
-        self._provider_changed(self.provider_combo.currentText(), initial=True)
 
-        audio_group = QGroupBox("Audio Sources")
+        audio_group = QGroupBox("Audio Sources — NVIDIA Nemotron STT")
         audio_layout = QFormLayout()
         self.mic_combo = QComboBox()
         self.system_combo = QComboBox()
@@ -96,7 +92,7 @@ class SettingsDialog(QDialog):
         audio_group.setLayout(audio_layout)
         main_layout.addWidget(audio_group)
 
-        capture_group = QGroupBox("Screen Capture Region")
+        capture_group = QGroupBox("Screen Capture Region — Gemini Vision")
         capture_layout = QVBoxLayout()
         self.region_label = QLabel()
         self.update_region_label()
@@ -143,15 +139,6 @@ class SettingsDialog(QDialog):
         buttons.addWidget(save_btn)
         main_layout.addLayout(buttons)
 
-    def _provider_changed(self, provider, initial=False):
-        old_model = self.settings.get("model", "") if initial else self.model_combo.currentText()
-        self.model_combo.clear()
-        self.model_combo.addItems(PROVIDER_MODELS[provider])
-        index = self.model_combo.findText(old_model)
-        self.model_combo.setCurrentIndex(index if index >= 0 else 0)
-        env_name = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
-        self.key_input.setPlaceholderText(f"Blank = use {env_name} from .env")
-
     def toggle_key_visibility(self, state):
         self.key_input.setEchoMode(QLineEdit.Normal if state == Qt.Checked.value else QLineEdit.Password)
 
@@ -194,8 +181,7 @@ class SettingsDialog(QDialog):
         self.activateWindow()
 
     def save_and_accept(self):
-        provider = self.provider_combo.currentText()
-        self.settings["provider"] = provider
+        self.settings["provider"] = "gemini"
         self.settings["model"] = self.model_combo.currentText()
         self.settings["api_key"] = self.key_input.text().strip()
         self.settings["mic_device_idx"] = self.mic_combo.currentData()
@@ -205,9 +191,12 @@ class SettingsDialog(QDialog):
         self.settings["window_opacity"] = self.opacity_slider.value() / 100.0
         self.settings["font_size"] = self.font_size_spin.value()
 
-        env_name = "GEMINI_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
-        if not self.settings["api_key"] and not os.environ.get(env_name, "").strip():
-            QMessageBox.warning(self, "API Key Missing", f"Add a key here or set {env_name} in .env.")
+        if not self.settings["api_key"] and not os.environ.get("GEMINI_API_KEY", "").strip():
+            QMessageBox.warning(
+                self,
+                "Gemini API Key Missing",
+                "Add a Gemini API key here or set GEMINI_API_KEY in .env.",
+            )
 
         config.save_settings(self.settings)
         self.settings_saved.emit(self.settings)
