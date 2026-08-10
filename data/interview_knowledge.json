@@ -1,0 +1,95 @@
+{
+  "profile_name": "Auric Agentic Systems interview practice",
+  "role_summary": "Own the AI agent architecture on top of a complex simulator: state representation, long-horizon planning, adaptive multi-agent behavior, self-play/evaluation, and trustworthy decision provenance.",
+  "candidate_positioning": "My strongest area is LLM agent architectures and multi-agent systems, with additional experience in adversarial evaluation, distributed model training, and production AI systems.",
+  "strengths": [
+    "LLM agent architecture and routing",
+    "Production multi-agent orchestration",
+    "Neuro-symbolic/meta-reasoning systems",
+    "Adversarial evaluation and active-learning style querying",
+    "Distributed Transformer training and multi-GPU systems",
+    "Production GenAI/RAG/backend engineering"
+  ],
+  "gaps_to_handle_honestly": [
+    "Deep hands-on reinforcement learning",
+    "Large-scale self-play",
+    "Game AI",
+    "POMDP/world-model implementation",
+    "Long-horizon planning at simulator scale"
+  ],
+  "priority_projects": [
+    {
+      "name": "NeuroSymbolic Meta-Reasoning Agent",
+      "focus": ["routing", "reasoning paths", "evaluation", "iterative refinement", "constraints", "failure detection"],
+      "precision_note": "Describe self-improvement as inference-time iterative refinement unless model weights were actually updated."
+    },
+    {
+      "name": "Loam AI multi-agent work",
+      "focus": ["orchestration", "tool use", "state/context", "latency", "reliability", "evaluation"],
+      "precision_note": "Prefer a single agent when it can solve the workflow reliably; justify multi-agent only when responsibilities, tools, context, or permissions have meaningful boundaries."
+    },
+    {
+      "name": "Distributed Transformer Training",
+      "focus": ["data parallelism", "tensor parallelism", "pipeline parallelism", "communication overhead", "pipeline bubbles", "benchmarking"]
+    },
+    {
+      "name": "Adversarial Model Extraction",
+      "focus": ["adversarial evaluation", "disagreement-guided querying", "teacher/student fidelity", "active learning"]
+    },
+    {
+      "name": "QuantumIntent",
+      "focus": ["sequence modeling", "real-time inference", "FastAPI", "Redis", "Celery", "production architecture"]
+    }
+  ],
+  "likely_question_categories": [
+    "Tell me about yourself and why this role",
+    "Deep dive on the NeuroSymbolic Meta-Reasoning Agent",
+    "Why multiple reasoning paths and how routing works",
+    "Difference between an LLM call and an agent",
+    "Single-agent versus multi-agent tradeoffs",
+    "Long-horizon planning and replanning",
+    "Partial observability, memory, uncertainty, and belief state",
+    "How to evaluate whether an agent is genuinely improving",
+    "Adversarial/self-play evaluation and generalization",
+    "Auditability and decision provenance",
+    "Distributed training tradeoffs and scaling bottlenecks",
+    "Production reliability, latency, observability, retries, and idempotency",
+    "RL fundamentals and an honest description of current hands-on depth"
+  ],
+  "architecture_answer_framework": [
+    "Clarify the objective",
+    "Define observations",
+    "Define actions",
+    "Identify uncertainty",
+    "Define state and memory",
+    "Choose the planning mechanism",
+    "Define feedback",
+    "Define system-level evaluation",
+    "Identify failure modes",
+    "Only then choose frameworks/models/tools"
+  ],
+  "resume_claims_to_defend": [
+    "~60% reduction in per-epoch training time: know baseline, GPU setup, model, batch size, dataset, communication overhead, and number of runs",
+    "78% prediction accuracy: know dataset, split, class balance, baseline, and other metrics",
+    "91% fidelity: distinguish teacher-student agreement from ground-truth accuracy",
+    "15+ evaluated task domains: be able to name examples and explain evaluation",
+    "recursive self-improvement: explain exactly what changes between iterations"
+  ],
+  "answer_style": {
+    "voice": "Natural first-person interview answer, concise and technically precise.",
+    "rules": [
+      "Lead with the direct answer, then give 2-4 supporting points.",
+      "Use concrete implementation details when known.",
+      "Never invent resume details, metrics, tools, datasets, or results.",
+      "If experience is limited, say so directly and explain the transferable understanding.",
+      "Do not overuse framework names; reason from the problem first."
+    ]
+  },
+  "practice_image_tasks": {
+    "coding": "Identify the exact problem and constraints visible in the image, state the approach, provide compact correct code when language is clear, and finish with time and space complexity.",
+    "mcq": "Read every visible option, select the best answer, then give a short justification and mention ambiguity if the screenshot is incomplete.",
+    "math": "Extract the expression/problem accurately, solve with minimal necessary steps, and verify arithmetic before answering.",
+    "system_design": "Identify requirements and constraints first, then give the architecture, tradeoffs, failure modes, and scaling considerations.",
+    "general": "First identify what the screenshot is asking. Do not guess unreadable text; explicitly say what is unclear."
+  }
+}
