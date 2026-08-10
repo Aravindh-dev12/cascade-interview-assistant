@@ -38,7 +38,6 @@ def load_project_env(project_dir: Path):
 
     normalize("GEMINI_API_KEY", ("GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY", "GEMINI_KEY"))
     normalize("NVIDIA_API_KEY", ("NVIDIA_KEY", "NVIDIA_APIKEY"))
-    normalize("OPENAI_API_KEY", ("OPENAI_KEY", "OPENAI_APIKEY"))
 
     detected_names = []
     for name in (
@@ -46,7 +45,6 @@ def load_project_env(project_dir: Path):
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GOOGLE_GENAI_API_KEY",
-        "OPENAI_API_KEY",
         "PRACTICE_MODE",
     ):
         if os.environ.get(name, "").strip() or (parsed and parsed.get(name)):
@@ -58,7 +56,6 @@ def load_project_env(project_dir: Path):
         "detected_names": detected_names,
         "nvidia_loaded": bool(os.environ.get("NVIDIA_API_KEY", "").strip()),
         "gemini_loaded": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
-        "openai_loaded": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
         "practice_mode": os.environ.get("PRACTICE_MODE", "0").strip().lower()
         in {"1", "true", "yes", "on"},
     }
