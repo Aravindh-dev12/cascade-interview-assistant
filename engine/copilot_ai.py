@@ -1,4 +1,3 @@
-import base64
 import io
 import json
 import os
@@ -7,12 +6,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from openai import OpenAI
 
 load_dotenv()
 
 DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 KB_PATH = PROJECT_DIR / "data" / "interview_knowledge.json"
 
@@ -45,24 +42,20 @@ def _load_interview_knowledge():
 
 
 class CopilotAI:
-    """Practice answer engine supporting Gemini 2.5 Flash or OpenAI.
+    """Gemini-only practice answer and vision engine.
 
     NVIDIA speech-to-text is handled separately by STTWorker. Interview context
     and multi-frame screenshot accumulation are used only in practice/permitted mode.
     """
 
     def __init__(self, provider="gemini", model=None, api_key=None):
-        self.provider = provider if provider in {"gemini", "openai"} else "gemini"
-        self.model = self._normalize_model(self.provider, model)
-        self.api_key = self._resolve_key(self.provider, api_key)
+        self.provider = "gemini"
+        self.model = self._normalize_model(model)
+        self.api_key = self._resolve_key(api_key)
         self._gemini_client = None
-        self._openai_client = None
         self.interview_knowledge = _load_interview_knowledge()
         self.transcript_history = []
         self.max_transcript_history = 12
-
-        # Practice screenshots are kept in chronological order so a long coding
-        # problem can be captured across multiple scroll positions.
         self.image_history = []
         self.image_fingerprints = []
         self.max_image_history = max(
@@ -70,32 +63,26 @@ class CopilotAI:
         )
 
     @staticmethod
-    def _normalize_model(provider, model):
+    def _normalize_model(model):
         model = str(model or "").strip()
-        if provider == "openai":
-            return model if model.startswith("gpt-") else DEFAULT_OPENAI_MODEL
         return model if model.startswith("gemini-2.5-") else DEFAULT_GEMINI_MODEL
 
     @staticmethod
-    def _resolve_key(provider, api_key=None):
+    def _resolve_key(api_key=None):
         supplied = (api_key or "").strip()
         if supplied:
             return supplied
-        if provider == "openai":
-            return os.environ.get("OPENAI_API_KEY", "").strip()
         return (
             os.environ.get("GEMINI_API_KEY", "").strip()
             or os.environ.get("GOOGLE_API_KEY", "").strip()
         )
 
     def set_config(self, provider=None, model=None, api_key=None):
-        next_provider = provider if provider in {"gemini", "openai"} else self.provider
-        next_model = self._normalize_model(next_provider, model)
-        next_key = self._resolve_key(next_provider, api_key)
-        if next_provider != self.provider or next_key != self.api_key:
+        next_model = self._normalize_model(model)
+        next_key = self._resolve_key(api_key)
+        if next_key != self.api_key:
             self._gemini_client = None
-            self._openai_client = None
-        self.provider = next_provider
+        self.provider = "gemini"
         self.model = next_model
         self.api_key = next_key
 
@@ -154,7 +141,6 @@ class CopilotAI:
         return total / (255.0 * len(left))
 
     def _remember_image(self, image_bytes):
-        """Add a screenshot unless it is effectively identical to the latest frame."""
         try:
             fingerprint = self._image_fingerprint(image_bytes)
         except Exception:
@@ -168,8 +154,6 @@ class CopilotAI:
                 self.image_fingerprints[-1], fingerprint
             )
             if distance <= duplicate_threshold:
-                # Replace the latest duplicate with the freshest capture without
-                # increasing the context window.
                 self.image_history[-1] = image_bytes
                 self.image_fingerprints[-1] = fingerprint
                 return len(self.image_history)
@@ -183,27 +167,18 @@ class CopilotAI:
 
     def _get_gemini_client(self):
         if not self.api_key:
-            self.api_key = self._resolve_key("gemini")
+            self.api_key = self._resolve_key()
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY is not configured")
         if self._gemini_client is None:
             self._gemini_client = genai.Client(api_key=self.api_key)
         return self._gemini_client
 
-    def _get_openai_client(self):
-        if not self.api_key:
-            self.api_key = self._resolve_key("openai")
-        if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
-        if self._openai_client is None:
-            self._openai_client = OpenAI(api_key=self.api_key, timeout=20.0, max_retries=0)
-        return self._openai_client
-
-    def _collect_fast(self, stream, min_env, max_env):
+    def _collect_fast(self, stream):
         pieces = []
         total_chars = 0
-        min_chars = int(os.environ.get(min_env, "140"))
-        hard_chars = int(os.environ.get(max_env, "1200"))
+        min_chars = int(os.environ.get("GEMINI_FAST_MIN_CHARS", "140"))
+        hard_chars = int(os.environ.get("GEMINI_FAST_MAX_CHARS", "1200"))
         for piece in stream:
             if not piece:
                 continue
@@ -231,43 +206,8 @@ class CopilotAI:
             if text:
                 yield text
 
-    def _openai_text(self, prompt):
-        response = self._get_openai_client().responses.create(
-            model=self.model,
-            instructions=SYSTEM_PROMPT,
-            input=prompt,
-            max_output_tokens=int(os.environ.get("OPENAI_TEXT_MAX_TOKENS", "512")),
-        )
-        return (response.output_text or "").strip()
-
-    def _openai_vision(self, image_frames, prompt):
-        content = [{"type": "input_text", "text": prompt}]
-        for image_bytes in image_frames:
-            encoded = base64.b64encode(image_bytes).decode("ascii")
-            content.append(
-                {
-                    "type": "input_image",
-                    "image_url": f"data:image/jpeg;base64,{encoded}",
-                }
-            )
-
-        response = self._get_openai_client().responses.create(
-            model=self.model,
-            instructions=SYSTEM_PROMPT,
-            input=[{"role": "user", "content": content}],
-            max_output_tokens=int(os.environ.get("OPENAI_VISION_MAX_TOKENS", "1400")),
-        )
-        return (response.output_text or "").strip()
-
     def generate_text_answer(self, custom_query=None):
-        prompt = self._build_prompt(custom_query)
-        if self.provider == "openai":
-            return self._openai_text(prompt)
-        return self._collect_fast(
-            self._gemini_stream(prompt),
-            "GEMINI_FAST_MIN_CHARS",
-            "GEMINI_FAST_MAX_CHARS",
-        )
+        return self._collect_fast(self._gemini_stream(self._build_prompt(custom_query)))
 
     def generate_vision_answer(self, image_bytes, custom_query=None):
         frame_count = self._remember_image(image_bytes)
@@ -291,29 +231,21 @@ class CopilotAI:
             image_task=image_task,
         )
 
-        frames = list(self.image_history)
-        print(f"[vision] Using {len(frames)} practice screenshot frame(s) as context.")
-
-        if self.provider == "openai":
-            return self._openai_vision(frames, prompt)
-
         from PIL import Image
 
         contents = [prompt]
-        for frame in frames:
+        for frame in self.image_history:
             contents.append(Image.open(io.BytesIO(frame)).convert("RGB"))
 
+        print(f"[vision] Using {len(self.image_history)} practice screenshot frame(s) as context.")
         return self._collect_fast(
             self._gemini_stream(
                 contents,
                 max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "1400")),
-            ),
-            "GEMINI_FAST_MIN_CHARS",
-            "GEMINI_FAST_MAX_CHARS",
+            )
         )
 
     def generate_answer(self, image_bytes=None, custom_query=None):
-        # In normal assessment mode this app remains transcription-only.
         if not _practice_mode_enabled():
             return (
                 "### Live transcription active\n\n"
@@ -326,5 +258,4 @@ class CopilotAI:
                 return self.generate_vision_answer(image_bytes, custom_query)
             return self.generate_text_answer(custom_query)
         except Exception as exc:
-            provider_name = "OpenAI" if self.provider == "openai" else "Gemini"
-            return f"### {provider_name} Error\n\n`{exc}`"
+            return f"### Gemini Error\n\n`{exc}`"
