@@ -19,19 +19,12 @@ DEFAULT_SETTINGS = {
 }
 
 
-def _normalize_provider_model(provider, model):
-    provider = provider if provider in {"gemini", "openai"} else "gemini"
-    model = str(model or "").strip()
-
-    if provider == "openai":
-        if not model.startswith("gpt-"):
-            model = "gpt-5"
-    else:
-        # Keep Gemini on the requested 2.x family. Migrate stale 2.0/3.x names.
-        if not model.startswith("gemini-2.5-"):
-            model = "gemini-2.5-flash"
-
-    return provider, model
+def _normalize_settings(settings):
+    settings["provider"] = "gemini"
+    model = str(settings.get("model", "")).strip()
+    if not model.startswith("gemini-2.5-"):
+        settings["model"] = "gemini-2.5-flash"
+    return settings
 
 
 def load_settings():
@@ -46,11 +39,7 @@ def load_settings():
         for key, value in user_data.items():
             if key in settings:
                 settings[key] = value
-
-        settings["provider"], settings["model"] = _normalize_provider_model(
-            settings.get("provider"), settings.get("model")
-        )
-        return settings
+        return _normalize_settings(settings)
     except Exception as exc:
         print(f"[config] Error loading settings: {exc}")
         return DEFAULT_SETTINGS.copy()
@@ -62,10 +51,7 @@ def save_settings(settings):
         for key in clean_settings:
             if key in settings:
                 clean_settings[key] = settings[key]
-
-        clean_settings["provider"], clean_settings["model"] = _normalize_provider_model(
-            clean_settings.get("provider"), clean_settings.get("model")
-        )
+        _normalize_settings(clean_settings)
 
         with open(CONFIG_FILE, "w") as file:
             json.dump(clean_settings, file, indent=4)
