@@ -34,12 +34,10 @@ class CopilotAI:
             or os.environ.get("GOOGLE_API_KEY", "").strip()
         )
         self._client = None
-
         self.transcript_history = []
         self.max_transcript_history = 12
 
     def set_config(self, provider=None, model=None, api_key=None):
-        """Keep compatibility with the UI while locking answers to Gemini."""
         self.provider = "gemini"
         if model and str(model).startswith("gemini-"):
             self.model = model
@@ -88,13 +86,11 @@ class CopilotAI:
         return f"Transcript:\n{transcript}\n\nTask:\n{task}"
 
     def _stream(self, contents, max_tokens=None):
-        client = self._get_client()
-        response = client.models.generate_content_stream(
+        response = self._get_client().models.generate_content_stream(
             model=self.model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                temperature=0.2,
                 max_output_tokens=max_tokens
                 or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "384")),
             ),
@@ -105,7 +101,6 @@ class CopilotAI:
                 yield text
 
     def _collect_fast(self, stream):
-        """Return a compact useful answer without waiting for a long generation."""
         pieces = []
         total_chars = 0
         min_chars = int(os.environ.get("GEMINI_FAST_MIN_CHARS", "120"))
@@ -115,12 +110,10 @@ class CopilotAI:
             pieces.append(piece)
             total_chars += len(piece)
             joined = "".join(pieces)
-
             if total_chars >= min_chars and joined.rstrip().endswith((".", "!", "?", "```")):
                 break
             if total_chars >= hard_chars:
                 break
-
         return "".join(pieces).strip()
 
     def generate_text_answer(self, custom_query=None):
@@ -141,9 +134,6 @@ class CopilotAI:
         )
 
     def generate_answer(self, image_bytes=None, custom_query=None):
-        """Compatibility method used by the existing Qt worker."""
-        # Automatic speech/screen -> answer is intentionally gated. Live
-        # transcription remains available regardless of this setting.
         if custom_query is None and not _practice_mode_enabled():
             return (
                 "### Live transcription active\n\n"
