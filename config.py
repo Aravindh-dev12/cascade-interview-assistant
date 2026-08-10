@@ -5,7 +5,7 @@ CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".ai_interview_copilot_setti
 
 DEFAULT_SETTINGS = {
     "provider": "gemini",
-    "model": "gemini-3.6-flash",
+    "model": "gemini-2.5-flash",
     "api_key": "",
     "mic_device_idx": -1,
     "system_device_idx": -1,
@@ -17,6 +17,21 @@ DEFAULT_SETTINGS = {
     "font_size": 13,
     "always_on_top": True,
 }
+
+
+def _normalize_provider_model(provider, model):
+    provider = provider if provider in {"gemini", "openai"} else "gemini"
+    model = str(model or "").strip()
+
+    if provider == "openai":
+        if not model.startswith("gpt-"):
+            model = "gpt-5"
+    else:
+        # Keep Gemini on the requested 2.x family. Migrate stale 2.0/3.x names.
+        if not model.startswith("gemini-2.5-"):
+            model = "gemini-2.5-flash"
+
+    return provider, model
 
 
 def load_settings():
@@ -32,10 +47,9 @@ def load_settings():
             if key in settings:
                 settings[key] = value
 
-        # All legacy provider choices are migrated to Gemini-only answers.
-        settings["provider"] = "gemini"
-        if not str(settings.get("model", "")).startswith("gemini-"):
-            settings["model"] = "gemini-3.6-flash"
+        settings["provider"], settings["model"] = _normalize_provider_model(
+            settings.get("provider"), settings.get("model")
+        )
         return settings
     except Exception as exc:
         print(f"[config] Error loading settings: {exc}")
@@ -48,7 +62,10 @@ def save_settings(settings):
         for key in clean_settings:
             if key in settings:
                 clean_settings[key] = settings[key]
-        clean_settings["provider"] = "gemini"
+
+        clean_settings["provider"], clean_settings["model"] = _normalize_provider_model(
+            clean_settings.get("provider"), clean_settings.get("model")
+        )
 
         with open(CONFIG_FILE, "w") as file:
             json.dump(clean_settings, file, indent=4)
