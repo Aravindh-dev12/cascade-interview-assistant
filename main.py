@@ -28,6 +28,7 @@ def main():
     print(f"[env] detected names: {', '.join(env_status['detected_names']) or 'none'}")
     print(f"[env] NVIDIA_API_KEY loaded: {env_status['nvidia_loaded']}")
     print(f"[env] GEMINI_API_KEY loaded: {env_status['gemini_loaded']}")
+    print(f"[env] OPENAI_API_KEY loaded: {env_status['openai_loaded']}")
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
 
     window = OverlayWindow()
