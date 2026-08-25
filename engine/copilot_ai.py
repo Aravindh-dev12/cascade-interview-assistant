@@ -7,7 +7,7 @@ from google.genai import types
 
 load_dotenv()
 
-DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
+DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 SYSTEM_PROMPT = (
     "You are a concise technical interview practice coach. Answer the latest question "
