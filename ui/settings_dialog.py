@@ -17,9 +17,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+import config
 from engine.audio_recorder import AudioRecorder
 from ui.region_selector import RegionSelector
-import config
+
+
+GEMINI_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+)
 
 
 class SettingsDialog(QDialog):
@@ -28,9 +34,10 @@ class SettingsDialog(QDialog):
     def __init__(self, current_settings, parent=None):
         super().__init__(parent)
         self.settings = current_settings.copy()
+        self.selector = None
         self.setWindowTitle("quntumnintent - Settings")
-        self.setMinimumWidth(480)
-        self.resize(500, 600)
+        self.setMinimumWidth(500)
+        self.resize(520, 720)
         self._apply_style()
         self.init_ui()
         self.load_devices_and_populate()
@@ -52,37 +59,62 @@ class SettingsDialog(QDialog):
             QSlider::groove:horizontal { height: 4px; background: #4A5568; }
         """)
 
+    @staticmethod
+    def _password_input(value, placeholder):
+        field = QLineEdit()
+        field.setEchoMode(QLineEdit.Password)
+        field.setText(value or "")
+        field.setPlaceholderText(placeholder)
+        return field
+
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
+        main_layout.setSpacing(12)
 
-        ai_group = QGroupBox("Gemini Answer Configuration")
-        ai_layout = QFormLayout()
+        gemini_group = QGroupBox("Gemini Answer Engine")
+        gemini_layout = QFormLayout()
         self.model_combo = QComboBox()
-        self.model_combo.addItems([
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-        ])
-        current_model = self.settings.get("model", "gemini-3.6-flash")
+        self.model_combo.addItems(GEMINI_MODELS)
+        current_model = self.settings.get("model", config.DEFAULT_GEMINI_MODEL)
         index = self.model_combo.findText(current_model)
         self.model_combo.setCurrentIndex(index if index >= 0 else 0)
 
-        self.key_input = QLineEdit()
-        self.key_input.setEchoMode(QLineEdit.Password)
-        self.key_input.setText(self.settings.get("api_key", ""))
-        self.key_input.setPlaceholderText("Blank = use GEMINI_API_KEY from .env")
+        self.gemini_key_input = self._password_input(
+            self.settings.get("api_key", ""),
+            "Blank = use GEMINI_API_KEY from .env",
+        )
+        self.show_gemini_key = QCheckBox("Show Gemini API key")
+        self.show_gemini_key.stateChanged.connect(
+            lambda state: self.gemini_key_input.setEchoMode(
+                QLineEdit.Normal if state == Qt.Checked.value else QLineEdit.Password
+            )
+        )
 
-        self.show_key_check = QCheckBox("Show Gemini API Key")
-        self.show_key_check.stateChanged.connect(self.toggle_key_visibility)
+        gemini_layout.addRow("Provider:", QLabel("Google Gemini only"))
+        gemini_layout.addRow("Model:", self.model_combo)
+        gemini_layout.addRow("Gemini API key:", self.gemini_key_input)
+        gemini_layout.addRow("", self.show_gemini_key)
+        gemini_group.setLayout(gemini_layout)
+        main_layout.addWidget(gemini_group)
 
-        ai_layout.addRow("Provider:", QLabel("Gemini only"))
-        ai_layout.addRow("Model:", self.model_combo)
-        ai_layout.addRow("Gemini API Key:", self.key_input)
-        ai_layout.addRow("", self.show_key_check)
-        ai_group.setLayout(ai_layout)
-        main_layout.addWidget(ai_group)
+        nvidia_group = QGroupBox("NVIDIA Real-Time Voice")
+        nvidia_layout = QFormLayout()
+        nvidia_layout.addRow("Model:", QLabel("nemotron-asr-streaming"))
+        self.nvidia_key_input = self._password_input(
+            self.settings.get("nvidia_api_key", ""),
+            "Blank = use NVIDIA_API_KEY from .env",
+        )
+        self.show_nvidia_key = QCheckBox("Show NVIDIA API key")
+        self.show_nvidia_key.stateChanged.connect(
+            lambda state: self.nvidia_key_input.setEchoMode(
+                QLineEdit.Normal if state == Qt.Checked.value else QLineEdit.Password
+            )
+        )
+        nvidia_layout.addRow("NVIDIA API key:", self.nvidia_key_input)
+        nvidia_layout.addRow("", self.show_nvidia_key)
+        nvidia_group.setLayout(nvidia_layout)
+        main_layout.addWidget(nvidia_group)
 
         audio_group = QGroupBox("Audio Sources")
         audio_layout = QFormLayout()
@@ -146,11 +178,6 @@ class SettingsDialog(QDialog):
         buttons.addWidget(save_btn)
         main_layout.addLayout(buttons)
 
-    def toggle_key_visibility(self, state):
-        self.key_input.setEchoMode(
-            QLineEdit.Normal if state == Qt.Checked.value else QLineEdit.Password
-        )
-
     def update_region_label(self):
         region = self.settings.get("capture_region")
         if region is None:
@@ -170,11 +197,11 @@ class SettingsDialog(QDialog):
 
         for item in mics:
             self.mic_combo.addItem(
-                f"{item['name']} ({item.get('api', 'Audio')})", item['index']
+                f"{item['name']} ({item.get('api', 'Audio')})", item["index"]
             )
         for item in loopbacks:
             self.system_combo.addItem(
-                f"{item['name']} ({item.get('api', 'Loopback')})", item['index']
+                f"{item['name']} ({item.get('api', 'Loopback')})", item["index"]
             )
 
         mic_index = self.mic_combo.findData(self.settings.get("mic_device_idx", -1))
@@ -203,9 +230,9 @@ class SettingsDialog(QDialog):
         self.activateWindow()
 
     def save_and_accept(self):
-        self.settings["provider"] = "gemini"
         self.settings["model"] = self.model_combo.currentText()
-        self.settings["api_key"] = self.key_input.text().strip()
+        self.settings["api_key"] = self.gemini_key_input.text().strip()
+        self.settings["nvidia_api_key"] = self.nvidia_key_input.text().strip()
         self.settings["mic_device_idx"] = self.mic_combo.currentData()
         self.settings["system_device_idx"] = self.system_combo.currentData()
         self.settings["invisible_mode"] = self.invisible_check.isChecked()
@@ -213,11 +240,18 @@ class SettingsDialog(QDialog):
         self.settings["window_opacity"] = self.opacity_slider.value() / 100.0
         self.settings["font_size"] = self.font_size_spin.value()
 
-        if not self.settings["api_key"] and not os.environ.get("GEMINI_API_KEY"):
+        missing = []
+        if not self.settings["api_key"] and not (
+            os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        ):
+            missing.append("Gemini API key")
+        if not self.settings["nvidia_api_key"] and not os.environ.get("NVIDIA_API_KEY"):
+            missing.append("NVIDIA API key")
+        if missing:
             QMessageBox.warning(
                 self,
-                "Gemini API Key Missing",
-                "Add a Gemini API key here or set GEMINI_API_KEY in .env.",
+                "API Key Missing",
+                "Missing: " + ", ".join(missing) + ". Add it here or in .env.",
             )
 
         config.save_settings(self.settings)
