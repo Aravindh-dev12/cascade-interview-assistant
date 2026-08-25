@@ -2,11 +2,12 @@ import json
 import os
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".ai_interview_copilot_settings.json")
+DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
 
 DEFAULT_SETTINGS = {
-    "provider": "gemini",
-    "model": "gemini-2.5-flash",
+    "model": DEFAULT_GEMINI_MODEL,
     "api_key": "",
+    "nvidia_api_key": "",
     "mic_device_idx": -1,
     "system_device_idx": -1,
     "hotkey_capture": "<ctrl>+<shift>+s",
@@ -19,19 +20,9 @@ DEFAULT_SETTINGS = {
 }
 
 
-def _normalize_provider_model(provider, model):
-    provider = provider if provider in {"gemini", "openai"} else "gemini"
+def _normalize_model(model):
     model = str(model or "").strip()
-
-    if provider == "openai":
-        if not model.startswith("gpt-"):
-            model = "gpt-5"
-    else:
-        # Keep Gemini on the requested 2.x family. Migrate stale 2.0/3.x names.
-        if not model.startswith("gemini-2.5-"):
-            model = "gemini-2.5-flash"
-
-    return provider, model
+    return model if model.startswith("gemini-") else DEFAULT_GEMINI_MODEL
 
 
 def load_settings():
@@ -39,7 +30,7 @@ def load_settings():
         return DEFAULT_SETTINGS.copy()
 
     try:
-        with open(CONFIG_FILE, "r") as file:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as file:
             user_data = json.load(file)
 
         settings = DEFAULT_SETTINGS.copy()
@@ -47,9 +38,7 @@ def load_settings():
             if key in settings:
                 settings[key] = value
 
-        settings["provider"], settings["model"] = _normalize_provider_model(
-            settings.get("provider"), settings.get("model")
-        )
+        settings["model"] = _normalize_model(settings.get("model"))
         return settings
     except Exception as exc:
         print(f"[config] Error loading settings: {exc}")
@@ -63,11 +52,9 @@ def save_settings(settings):
             if key in settings:
                 clean_settings[key] = settings[key]
 
-        clean_settings["provider"], clean_settings["model"] = _normalize_provider_model(
-            clean_settings.get("provider"), clean_settings.get("model")
-        )
+        clean_settings["model"] = _normalize_model(clean_settings.get("model"))
 
-        with open(CONFIG_FILE, "w") as file:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as file:
             json.dump(clean_settings, file, indent=4)
         print(f"[config] Settings saved successfully to {CONFIG_FILE}")
         return True
