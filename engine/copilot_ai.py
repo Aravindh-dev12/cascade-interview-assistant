@@ -1,16 +1,13 @@
-import base64
 import io
 import os
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from openai import OpenAI
 
 load_dotenv()
 
-DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
+DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
 
 SYSTEM_PROMPT = (
     "You are a concise technical interview practice coach. Answer the latest question "
@@ -22,54 +19,43 @@ SYSTEM_PROMPT = (
 
 def _practice_mode_enabled():
     return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {
-        "1", "true", "yes", "on"
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
 class CopilotAI:
-    """Answer engine supporting Gemini 2.5 Flash or OpenAI.
+    """Gemini-only answer engine for text and screen/vision prompts."""
 
-    NVIDIA speech-to-text is intentionally handled separately by STTWorker.
-    """
-
-    def __init__(self, provider="gemini", model=None, api_key=None):
-        self.provider = provider if provider in {"gemini", "openai"} else "gemini"
-        self.model = self._normalize_model(self.provider, model)
-        self.api_key = self._resolve_key(self.provider, api_key)
+    def __init__(self, model=None, api_key=None):
+        self.model = self._normalize_model(model)
+        self.api_key = self._resolve_key(api_key)
         self._gemini_client = None
-        self._openai_client = None
         self.transcript_history = []
         self.max_transcript_history = 12
 
     @staticmethod
-    def _normalize_model(provider, model):
+    def _normalize_model(model):
         model = str(model or "").strip()
-        if provider == "openai":
-            return model if model.startswith("gpt-") else DEFAULT_OPENAI_MODEL
-        return model if model.startswith("gemini-2.5-") else DEFAULT_GEMINI_MODEL
+        return model if model.startswith("gemini-") else DEFAULT_GEMINI_MODEL
 
     @staticmethod
-    def _resolve_key(provider, api_key=None):
+    def _resolve_key(api_key=None):
         supplied = (api_key or "").strip()
         if supplied:
             return supplied
-        if provider == "openai":
-            return os.environ.get("OPENAI_API_KEY", "").strip()
         return (
             os.environ.get("GEMINI_API_KEY", "").strip()
             or os.environ.get("GOOGLE_API_KEY", "").strip()
         )
 
-    def set_config(self, provider=None, model=None, api_key=None):
-        next_provider = provider if provider in {"gemini", "openai"} else self.provider
-        next_model = self._normalize_model(next_provider, model)
-        next_key = self._resolve_key(next_provider, api_key)
-
-        if next_provider != self.provider or next_key != self.api_key:
+    def set_config(self, model=None, api_key=None):
+        next_model = self._normalize_model(model)
+        next_key = self._resolve_key(api_key)
+        if next_key != self.api_key:
             self._gemini_client = None
-            self._openai_client = None
-
-        self.provider = next_provider
         self.model = next_model
         self.api_key = next_key
 
@@ -95,21 +81,12 @@ class CopilotAI:
 
     def _get_gemini_client(self):
         if not self.api_key:
-            self.api_key = self._resolve_key("gemini")
+            self.api_key = self._resolve_key()
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY is not configured")
         if self._gemini_client is None:
             self._gemini_client = genai.Client(api_key=self.api_key)
         return self._gemini_client
-
-    def _get_openai_client(self):
-        if not self.api_key:
-            self.api_key = self._resolve_key("openai")
-        if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
-        if self._openai_client is None:
-            self._openai_client = OpenAI(api_key=self.api_key, timeout=20.0, max_retries=0)
-        return self._openai_client
 
     def _collect_fast(self, stream, min_env, max_env):
         pieces = []
@@ -144,40 +121,8 @@ class CopilotAI:
             if text:
                 yield text
 
-    def _openai_text(self, prompt):
-        response = self._get_openai_client().responses.create(
-            model=self.model,
-            instructions=SYSTEM_PROMPT,
-            input=prompt,
-            max_output_tokens=int(os.environ.get("OPENAI_TEXT_MAX_TOKENS", "384")),
-        )
-        return (response.output_text or "").strip()
-
-    def _openai_vision(self, image_bytes, prompt):
-        encoded = base64.b64encode(image_bytes).decode("ascii")
-        response = self._get_openai_client().responses.create(
-            model=self.model,
-            instructions=SYSTEM_PROMPT,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:image/jpeg;base64,{encoded}",
-                        },
-                    ],
-                }
-            ],
-            max_output_tokens=int(os.environ.get("OPENAI_VISION_MAX_TOKENS", "768")),
-        )
-        return (response.output_text or "").strip()
-
     def generate_text_answer(self, custom_query=None):
         prompt = self._build_prompt(custom_query)
-        if self.provider == "openai":
-            return self._openai_text(prompt)
         return self._collect_fast(
             self._gemini_stream(prompt),
             "GEMINI_FAST_MIN_CHARS",
@@ -185,14 +130,12 @@ class CopilotAI:
         )
 
     def generate_vision_answer(self, image_bytes, custom_query=None):
-        prompt = self._build_prompt(
-            custom_query or "Solve or explain the coding, MCQ, diagram, or question shown in this image for practice."
-        )
-        if self.provider == "openai":
-            return self._openai_vision(image_bytes, prompt)
-
         from PIL import Image
 
+        prompt = self._build_prompt(
+            custom_query
+            or "Solve or explain the coding, MCQ, diagram, or question shown in this image for practice."
+        )
         image = Image.open(io.BytesIO(image_bytes))
         return self._collect_fast(
             self._gemini_stream(
@@ -216,5 +159,4 @@ class CopilotAI:
                 return self.generate_vision_answer(image_bytes, custom_query)
             return self.generate_text_answer(custom_query)
         except Exception as exc:
-            provider_name = "OpenAI" if self.provider == "openai" else "Gemini"
-            return f"### {provider_name} Error\n\n`{exc}`"
+            return f"### Gemini Error\n\n`{exc}`"
