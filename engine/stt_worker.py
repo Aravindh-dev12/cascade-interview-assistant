@@ -13,14 +13,23 @@ except ImportError:
 
 
 class _StreamingSession:
-    """One low-latency NVIDIA Riva streaming ASR request."""
+    """One low-latency NVIDIA Nemotron streaming ASR request."""
 
     _STOP = object()
 
-    def __init__(self, asr_service, streaming_config, speaker_label, on_final, on_error):
+    def __init__(
+        self,
+        asr_service,
+        streaming_config,
+        speaker_label,
+        on_partial,
+        on_final,
+        on_error,
+    ):
         self.asr_service = asr_service
         self.streaming_config = streaming_config
         self.speaker_label = speaker_label
+        self.on_partial = on_partial
         self.on_final = on_final
         self.on_error = on_error
         self.audio_queue = queue.Queue(maxsize=128)
@@ -38,7 +47,6 @@ class _StreamingSession:
         try:
             self.audio_queue.put(pcm_bytes, timeout=0.05)
         except queue.Full:
-            # Prefer dropping stale audio over building seconds of latency.
             pass
 
     def close(self):
@@ -78,8 +86,9 @@ class _StreamingSession:
                         if not self.final_emitted:
                             self.final_emitted = True
                             self.on_final(self.speaker_label, text)
-                    else:
+                    elif text != self.last_partial:
                         self.last_partial = text
+                        self.on_partial(self.speaker_label, text)
 
             if not self.final_emitted and self.last_partial:
                 self.final_emitted = True
@@ -89,6 +98,7 @@ class _StreamingSession:
 
 
 class STTWorker(QThread):
+    partial_transcription_ready = Signal(str, str)
     transcription_ready = Signal(str, str)
     status_updated = Signal(str)
     error_occurred = Signal(str)
@@ -96,7 +106,7 @@ class STTWorker(QThread):
     def __init__(self, audio_recorder, api_key=None):
         super().__init__()
         self.audio_recorder = audio_recorder
-        self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+        self.api_key = (api_key or os.environ.get("NVIDIA_API_KEY", "")).strip()
         self.running = False
 
         self.silence_threshold = float(os.environ.get("ASR_VAD_THRESHOLD", "0.005"))
@@ -124,7 +134,7 @@ class STTWorker(QThread):
         self.system_session = None
 
     def set_api_key(self, api_key=None):
-        self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+        self.api_key = (api_key or os.environ.get("NVIDIA_API_KEY", "")).strip()
         self._asr_service = None
 
     def stop(self):
@@ -151,9 +161,8 @@ class STTWorker(QThread):
 
     def _ensure_client(self):
         if self._asr_service is None:
-            self.set_api_key()
             self._asr_service = self._create_client()
-            print("[stt] NVIDIA Nemotron ASR Streaming client initialized.")
+            print("[stt] NVIDIA Nemotron streaming ASR client initialized.")
         return self._asr_service
 
     def _build_streaming_config(self):
@@ -190,6 +199,7 @@ class STTWorker(QThread):
             self._ensure_client(),
             self._build_streaming_config(),
             speaker_label,
+            self._on_partial_transcript,
             self._on_final_transcript,
             self._on_stream_error,
         )
@@ -199,6 +209,11 @@ class STTWorker(QThread):
     @staticmethod
     def _to_pcm16(audio_chunk):
         return (np.clip(audio_chunk, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+
+    def _on_partial_transcript(self, speaker_label, text):
+        text = text.strip()
+        if text:
+            self.partial_transcription_ready.emit(speaker_label, text)
 
     def _on_final_transcript(self, speaker_label, text):
         text = text.strip()
@@ -226,7 +241,7 @@ class STTWorker(QThread):
 
     def run(self):
         self.running = True
-        self.status_updated.emit("Nemotron real-time ASR ready...")
+        self.status_updated.emit("NVIDIA Nemotron real-time ASR ready")
         print("[stt] NVIDIA Nemotron streaming worker started.")
 
         while self.running:
@@ -280,7 +295,9 @@ class STTWorker(QThread):
                 try:
                     session = self._new_session(speaker_label)
                 except Exception as exc:
-                    self._on_stream_error(f"NVIDIA ASR stream start error ({speaker_label}): {exc}")
+                    self._on_stream_error(
+                        f"NVIDIA ASR stream start error ({speaker_label}): {exc}"
+                    )
                     return
                 speech_active = True
                 speech_samples = 0

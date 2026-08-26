@@ -1,14 +1,8 @@
-from PySide6.QtWidgets import QPushButton, QSizeGrip, QWidget
+from PySide6.QtWidgets import QPushButton, QWidget
 
 
 class ScreenCaptureControls:
-    """Restore manual screen-capture entry points for the existing overlay.
-
-    The overlay already owns trigger_screen_analysis(). This helper only
-    reconnects the global capture hotkey and adds the missing Capture Screen
-    button to the bottom toolbar. The answer engine itself still enforces the
-    app's practice/permitted-use mode.
-    """
+    """Attach the existing screen-capture action to the production control bar."""
 
     def __init__(self, window):
         self.window = window
@@ -28,17 +22,15 @@ class ScreenCaptureControls:
     def _add_capture_button(self):
         control_bar = self.window.findChild(QWidget, "controlBar")
         if control_bar is None or control_bar.layout() is None:
-            print("[capture] Bottom control bar not found; hotkey remains available.")
+            print("[capture] Control bar not found; hotkey remains available.")
             return
 
         layout = control_bar.layout()
-        button = QPushButton("📸 Capture Screen")
+        button = QPushButton("Capture screen")
         button.setObjectName("captureBtn")
-        button.setToolTip("Capture the configured screen region and analyze it with Gemini")
         button.clicked.connect(self.window.trigger_screen_analysis)
 
-        # Put the button after Start Listening and before utility controls.
         insert_at = min(1, layout.count())
         layout.insertWidget(insert_at, button)
         self.capture_button = button
-        print("[capture] Capture Screen button restored.")
+        print("[capture] Capture Screen button attached.")
