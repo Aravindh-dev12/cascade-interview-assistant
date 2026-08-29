@@ -6,14 +6,15 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 DEFAULT_SETTINGS = {
     "model": DEFAULT_GEMINI_MODEL,
-    "api_key": "",
-    "nvidia_api_key": "",
     "mic_device_idx": -1,
     "system_device_idx": -1,
     "hotkey_capture": "<ctrl>+<shift>+s",
     "hotkey_record": "<ctrl>+<shift>+a",
     "capture_region": None,
-    "window_opacity": 0.90,
+    "auto_start_listening": True,
+    "auto_answer_speech": True,
+    "answer_cooldown_seconds": 1.2,
+    "window_opacity": 0.94,
     "invisible_mode": True,
     "font_size": 13,
     "always_on_top": True,
@@ -46,6 +47,11 @@ def load_settings():
 
 
 def save_settings(settings):
+    """Persist UI/runtime preferences only.
+
+    API credentials intentionally never live in this JSON file. Gemini and NVIDIA
+    keys are loaded from the project-local .env by utils.env_loader.
+    """
     try:
         clean_settings = DEFAULT_SETTINGS.copy()
         for key in clean_settings:
