@@ -12,6 +12,7 @@ from utils.env_loader import load_project_env
 env_status = load_project_env(PROJECT_DIR)
 
 from ui.overlay_window import OverlayWindow
+from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.mouse_passthrough import MousePassthroughController
 from utils.screen_capture_controls import ScreenCaptureControls
 
@@ -39,6 +40,9 @@ def main():
 
     mouse_passthrough = MousePassthroughController(window)
     window.mouse_passthrough_controller = mouse_passthrough
+
+    audio_device_monitor = AudioDeviceMonitor(window)
+    window.audio_device_monitor = audio_device_monitor
 
     window.raise_()
     window.activateWindow()
