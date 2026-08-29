@@ -1,35 +1,32 @@
 # quntumnintent
 
-A Windows desktop practice assistant with a lightweight overlay, real-time microphone/system-audio transcription, and screen-aware technical Q&A.
+A Windows desktop practice assistant with a lightweight overlay, real-time microphone/system-audio transcription, chat, and screen-aware technical Q&A.
 
 ## AI stack
 
-This project now uses only two AI services:
-
-- **Google Gemini** for all text and vision reasoning. Default model: `gemini-2.5-flash`.
-- **NVIDIA Nemotron streaming ASR** for real-time speech-to-text. The hosted Riva endpoint uses NVIDIA's `nemotron-asr-streaming` NIM and supports interim streaming transcripts.
+- **Google Gemini** for text, chat, and vision reasoning. Default model: `gemini-2.5-flash`.
+- **NVIDIA Nemotron streaming ASR** for low-latency real-time speech-to-text through NVIDIA Riva.
 
 There is no OpenAI provider or OpenAI SDK path in the application.
 
-## Features
+## Main workflow
 
-- Real-time microphone capture for the candidate.
-- Windows system/loopback audio capture for the interviewer when a compatible input is available.
-- Low-latency NVIDIA streaming ASR with interim and final transcripts.
-- Gemini text answers from transcript context.
-- Gemini vision analysis for a selected screen region.
-- Global shortcuts:
-  - `Ctrl+Shift+A` toggles listening.
-  - `Ctrl+Shift+S` captures/analyzes the configured screen region.
-- Configurable always-on-top/translucent overlay.
-- Automatic coaching is disabled by default; enable `PRACTICE_MODE=1` only for mock interviews or environments where AI assistance is permitted.
+- API credentials load automatically from the project-local `.env` when the app starts.
+- Settings never store or display Gemini/NVIDIA API keys.
+- In practice mode, listening can start automatically at launch.
+- Interviewer speech is transcribed in real time and can automatically trigger a concise Gemini answer.
+- Typed chat questions are answered using recent transcript context.
+- Screen capture sends the configured screen region plus recent transcript context to Gemini Vision.
+- Speech, chat, and screen requests share an internal queue, so requests are not discarded while another answer is running.
+
+Automatic speech coaching is intended only for mock interviews, practice sessions, or environments where AI assistance is explicitly permitted.
 
 ## Requirements
 
-- Windows 10/11 is recommended for system-audio loopback and protected overlay features.
+- Windows 10/11 recommended for system-audio loopback and protected overlay features.
 - Python 3.9+.
-- A Gemini API key.
-- An NVIDIA API key for the hosted Nemotron/Riva speech endpoint.
+- Gemini API key.
+- NVIDIA API key for the hosted Nemotron/Riva speech endpoint.
 
 ## Install
 
@@ -41,15 +38,15 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-## Configure
+## Configure `.env`
 
-Copy the environment template:
+Copy the template once:
 
 ```bash
 copy .env.template .env
 ```
 
-Then set your own keys in `.env`:
+Put your credentials in `.env`:
 
 ```env
 GEMINI_API_KEY=your-gemini-api-key
@@ -59,27 +56,43 @@ NVIDIA_API_KEY=your-nvidia-api-key
 NVIDIA_RIVA_SERVER=grpc.nvcf.nvidia.com:443
 NVIDIA_RIVA_FUNCTION_ID=bb0837de-8c7b-481f-9ec8-ef5663e9c1fa
 NVIDIA_RIVA_LANGUAGE=en-US
+
+# Enable hands-free transcript -> answer only for permitted practice use.
+PRACTICE_MODE=1
 ```
 
-The NVIDIA function ID above is the hosted `nemotron-asr-streaming` endpoint documented by NVIDIA. You can also paste the Gemini and NVIDIA keys in the Settings dialog instead of storing them in `.env`.
+No API-key entry is required inside the Settings window. On startup, Settings reports whether Gemini and NVIDIA credentials were detected from `.env`.
 
-Never commit a real `.env` file or real credentials. If a key has ever been committed to Git history, revoke/rotate it even after replacing the current file with placeholders.
+Never commit a real `.env` file or credentials. If a key has ever been committed to Git history, revoke/rotate it even after replacing the current file with placeholders.
 
 ## Real-time voice flow
 
 1. `AudioRecorder` captures 16 kHz microphone audio and, when available, Windows loopback/system audio.
-2. `STTWorker` opens an NVIDIA Riva gRPC streaming session for each active speaker utterance.
-3. Interim hypotheses are emitted immediately to the overlay as a live line.
-4. Final transcripts are added to the conversation context.
-5. In practice mode, substantive interviewer transcripts can trigger a Gemini answer.
+2. `STTWorker` opens NVIDIA Riva streaming sessions and emits interim transcripts immediately.
+3. Final transcript lines are added to Gemini conversation context.
+4. With `PRACTICE_MODE=1` and **Auto-answer** enabled, substantive interviewer speech queues a Gemini response automatically.
+5. New speech, chat, and screen requests wait in the same answer queue instead of being dropped.
 
-Latency can be tuned with:
+Latency can be tuned in `.env`:
 
 ```env
 ASR_ENDPOINT_SECONDS=0.50
 ASR_VAD_THRESHOLD=0.005
 ASR_MAX_UTTERANCE_SECONDS=20
+GEMINI_FAST_MIN_CHARS=120
+GEMINI_FAST_MAX_CHARS=700
 ```
+
+## Chat and screen answers
+
+Use the chat field in the overlay and press **Send** (or Enter) for a text question based on recent context.
+
+Use **Capture screen** or `Ctrl+Shift+S` to capture the configured region and ask Gemini to solve or explain the visible question, code, diagram, or MCQ.
+
+## Shortcuts
+
+- `Ctrl+Shift+A` — toggle live listening.
+- `Ctrl+Shift+S` — capture screen region and answer.
 
 ## Run
 
@@ -87,8 +100,8 @@ ASR_MAX_UTTERANCE_SECONDS=20
 python main.py
 ```
 
-Open Settings and choose your microphone and system/loopback device. The UI shows separate fields for the Gemini API key and NVIDIA API key.
+If `PRACTICE_MODE=1`, `NVIDIA_API_KEY` is available, and **Start listening automatically** is enabled in Settings, the voice listener starts automatically shortly after launch.
 
-## Security note
+## Security
 
-`.env.template` must contain placeholders only. Keep `.env` ignored by Git and rotate any credential that was previously committed.
+`.env.template` must contain placeholders only. Real credentials belong only in the ignored local `.env`; they are not copied into the app settings JSON.
