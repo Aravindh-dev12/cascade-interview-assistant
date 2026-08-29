@@ -10,10 +10,17 @@ load_dotenv()
 DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 SYSTEM_PROMPT = (
-    "You are a concise technical interview practice coach. Answer the latest question "
-    "directly. Put the most useful answer first. For coding questions, give the core "
-    "approach and compact code, then time and space complexity. For MCQs, state the "
-    "best option first and briefly justify it. Avoid filler."
+    "You are a fast technical interview practice coach. Give the useful answer first, "
+    "then a short human-style explanation. Be decisive and concise. For MCQs, output "
+    "the best option/answer on the first line, then one or two sentences explaining why. "
+    "For coding questions, detect the requested programming language from the prompt or "
+    "image and use it. Support Python, C, C++, Java, JavaScript, TypeScript, C#, Go, Rust, "
+    "Kotlin, Swift, PHP, Ruby, SQL, Bash and other common languages. If no language is "
+    "specified, prefer Python. Put the solution code before detailed explanation, followed "
+    "by a compact approach and time/space complexity. For debugging questions, identify "
+    "the bug and show the corrected code. For conceptual questions, answer naturally as "
+    "a strong candidate would speak: clear, direct, and not robotic. Do not add filler or "
+    "repeat the question."
 )
 
 
@@ -76,7 +83,10 @@ class CopilotAI:
 
     def _build_prompt(self, custom_query=None):
         transcript = self.get_formatted_transcript()
-        task = custom_query or "Answer the latest substantive question in this practice transcript."
+        task = custom_query or (
+            "Answer the latest substantive interviewer question for a mock/practice "
+            "interview. Return the direct candidate-ready answer first."
+        )
         return f"Transcript:\n{transcript}\n\nTask:\n{task}"
 
     def _get_gemini_client(self):
@@ -91,8 +101,8 @@ class CopilotAI:
     def _collect_fast(self, stream, min_env, max_env):
         pieces = []
         total_chars = 0
-        min_chars = int(os.environ.get(min_env, "120"))
-        hard_chars = int(os.environ.get(max_env, "700"))
+        min_chars = int(os.environ.get(min_env, "80"))
+        hard_chars = int(os.environ.get(max_env, "650"))
 
         for piece in stream:
             if not piece:
@@ -107,13 +117,17 @@ class CopilotAI:
         return "".join(pieces).strip()
 
     def _gemini_stream(self, contents, max_tokens=None):
+        thinking_budget = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
         response = self._get_gemini_client().models.generate_content_stream(
             model=self.model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 max_output_tokens=max_tokens
-                or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "384")),
+                or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "320")),
+                thinking_config=types.ThinkingConfig(
+                    thinking_budget=thinking_budget,
+                ),
             ),
         )
         for chunk in response:
@@ -134,13 +148,20 @@ class CopilotAI:
 
         prompt = self._build_prompt(
             custom_query
-            or "Solve or explain the coding, MCQ, diagram, or question shown in this image for practice."
+            or (
+                "Analyze the screenshot immediately. Determine whether it is an MCQ, "
+                "coding problem, debugging task, output question, diagram, or conceptual "
+                "question. For an MCQ, give the correct option first. For coding, detect "
+                "the requested language and return working code first; if no language is "
+                "specified use Python. Then give only the essential explanation and "
+                "complexity. Read all visible constraints and examples carefully."
+            )
         )
         image = Image.open(io.BytesIO(image_bytes))
         return self._collect_fast(
             self._gemini_stream(
                 [prompt, image],
-                max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "768")),
+                max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "640")),
             ),
             "GEMINI_FAST_MIN_CHARS",
             "GEMINI_FAST_MAX_CHARS",
