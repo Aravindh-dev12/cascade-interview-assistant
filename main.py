@@ -2,6 +2,7 @@ import sys
 import os
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -41,6 +42,16 @@ def main():
 
     window.raise_()
     window.activateWindow()
+
+    # Start hands-free listening automatically only in explicitly enabled practice
+    # mode. API keys are loaded directly from the project-local .env; the user does
+    # not need to paste credentials into Settings.
+    if (
+        window.settings.get("auto_start_listening", True)
+        and env_status["practice_mode"]
+        and env_status["nvidia_loaded"]
+    ):
+        QTimer.singleShot(350, window.toggle_recording)
 
     print("[main] quntumnintent running.")
     print("Press Ctrl+Shift+S globally to Capture Region & Answer.")
