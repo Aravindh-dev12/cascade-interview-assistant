@@ -27,7 +27,7 @@ def _practice_mode_enabled():
 
 
 class CopilotAI:
-    """Gemini-only answer engine for text and screen/vision prompts."""
+    """Gemini-only answer engine for text, chat, and screen/vision prompts."""
 
     def __init__(self, model=None, api_key=None):
         self.model = self._normalize_model(model)
@@ -83,7 +83,7 @@ class CopilotAI:
         if not self.api_key:
             self.api_key = self._resolve_key()
         if not self.api_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured")
+            raise RuntimeError("GEMINI_API_KEY is not configured in the project .env")
         if self._gemini_client is None:
             self._gemini_client = genai.Client(api_key=self.api_key)
         return self._gemini_client
@@ -147,11 +147,14 @@ class CopilotAI:
         )
 
     def generate_answer(self, image_bytes=None, custom_query=None):
-        if custom_query is None and not _practice_mode_enabled():
+        # Only hands-free transcript coaching is practice-mode gated. Explicit user
+        # actions (typed chat and screen capture) remain available independently.
+        if image_bytes is None and custom_query is None and not _practice_mode_enabled():
             return (
-                "### Live transcription active\n\n"
-                "Automatic coaching is disabled. Set `PRACTICE_MODE=1` only for "
-                "mock interviews or sessions where AI assistance is explicitly permitted."
+                "### Automatic coaching is off\n\n"
+                "Set `PRACTICE_MODE=1` in `.env` for mock interviews or sessions "
+                "where AI assistance is explicitly permitted. Chat and screen capture "
+                "still work as explicit actions."
             )
 
         try:
