@@ -40,7 +40,7 @@ class ScreenCaptureControls:
         print("[capture] Capture Screen button attached.")
 
     def capture_and_answer(self):
-        """Hide the overlay, capture the current work monitor, then restore it."""
+        """Hide the overlay, capture its current monitor, then restore it."""
         if self.capture_in_progress:
             return
         self.capture_in_progress = True
@@ -51,29 +51,20 @@ class ScreenCaptureControls:
 
         center = self.window.frameGeometry().center()
         capture_point = (center.x(), center.y())
-        saved_region = self.window.settings.get("capture_region")
 
-        # Hide the overlay before MSS grabs pixels. This avoids covering the
-        # question and works even if Windows display-affinity protection is not
-        # supported by the current GPU/Windows configuration.
         self.window.hide()
         QApplication.processEvents()
-        QTimer.singleShot(
-            120,
-            lambda: self._perform_capture(saved_region, capture_point),
-        )
+        QTimer.singleShot(120, lambda: self._perform_capture(capture_point))
 
-    def _perform_capture(self, saved_region, capture_point):
+    def _perform_capture(self, capture_point):
         try:
-            # A saved region remains supported. Without one, capture the monitor
-            # where the assistant was located instead of blindly using monitor #1.
-            image = capture_screen(
-                region=saved_region,
-                point=None if saved_region is not None else capture_point,
-            )
+            # The main Capture Screen action deliberately ignores any previously
+            # saved crop. It captures the complete monitor containing the overlay,
+            # so a stale region cannot make the app miss the visible problem.
+            image = capture_screen(region=None, point=capture_point)
 
-            # Keep enough resolution for code/MCQ text recognition while avoiding
-            # unnecessarily large vision payloads.
+            # Preserve enough pixels for small code/MCQ text while keeping the
+            # Gemini request reasonably small and fast.
             if image.width > 1600:
                 from PIL import Image
 
@@ -90,8 +81,7 @@ class ScreenCaptureControls:
             )
         except Exception as exc:
             self.window.answer_display.setMarkdown(
-                f"### Screen capture failed\n\n`{exc}`\n\n"
-                "Try clearing the saved capture region in Settings and capture again."
+                f"### Screen capture failed\n\n`{exc}`"
             )
             self.window._set_status("ERROR")
         finally:
