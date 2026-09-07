@@ -2,29 +2,36 @@ import json
 import os
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".ai_interview_copilot_settings.json")
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 DEFAULT_SETTINGS = {
-    "provider": "gemini",
-    "model": "gemini-2.5-flash",
-    "api_key": "",
+    "model": DEFAULT_GEMINI_MODEL,
     "mic_device_idx": -1,
     "system_device_idx": -1,
     "hotkey_capture": "<ctrl>+<shift>+s",
     "hotkey_record": "<ctrl>+<shift>+a",
     "capture_region": None,
-    "window_opacity": 0.90,
-    "invisible_mode": True,
+    "auto_start_listening": True,
+    "auto_answer_speech": True,
+    "auto_detect_audio_devices": True,
+    "answer_cooldown_seconds": 0.6,
+    "auto_screen_watch": True,
+    "auto_answer_screen": True,
+    "screen_watch_interval_ms": 650,
+    "screen_stable_ms": 450,
+    "screen_change_threshold": 0.055,
+    "screen_context_max_age_seconds": 12.0,
+    "include_screen_with_speech": True,
+    "window_opacity": 0.94,
+    "invisible_mode": False,
     "font_size": 13,
     "always_on_top": True,
 }
 
 
-def _normalize_settings(settings):
-    settings["provider"] = "gemini"
-    model = str(settings.get("model", "")).strip()
-    if not model.startswith("gemini-2.5-"):
-        settings["model"] = "gemini-2.5-flash"
-    return settings
+def _normalize_model(model):
+    model = str(model or "").strip()
+    return model if model.startswith("gemini-") else DEFAULT_GEMINI_MODEL
 
 
 def load_settings():
@@ -32,28 +39,31 @@ def load_settings():
         return DEFAULT_SETTINGS.copy()
 
     try:
-        with open(CONFIG_FILE, "r") as file:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as file:
             user_data = json.load(file)
 
         settings = DEFAULT_SETTINGS.copy()
         for key, value in user_data.items():
             if key in settings:
                 settings[key] = value
-        return _normalize_settings(settings)
+
+        settings["model"] = _normalize_model(settings.get("model"))
+        return settings
     except Exception as exc:
         print(f"[config] Error loading settings: {exc}")
         return DEFAULT_SETTINGS.copy()
 
 
 def save_settings(settings):
+    """Persist UI/runtime preferences only; API keys remain in project-local env files."""
     try:
         clean_settings = DEFAULT_SETTINGS.copy()
         for key in clean_settings:
             if key in settings:
                 clean_settings[key] = settings[key]
-        _normalize_settings(clean_settings)
 
-        with open(CONFIG_FILE, "w") as file:
+        clean_settings["model"] = _normalize_model(clean_settings.get("model"))
+        with open(CONFIG_FILE, "w", encoding="utf-8") as file:
             json.dump(clean_settings, file, indent=4)
         print(f"[config] Settings saved successfully to {CONFIG_FILE}")
         return True

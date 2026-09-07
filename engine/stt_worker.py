@@ -13,18 +13,17 @@ except ImportError:
 
 
 class _StreamingSession:
-    """One low-latency NVIDIA Riva streaming ASR request."""
-
     _STOP = object()
 
-    def __init__(self, asr_service, streaming_config, speaker_label, on_final, on_error):
+    def __init__(self, asr_service, streaming_config, speaker_label, on_partial, on_final, on_error):
         self.asr_service = asr_service
         self.streaming_config = streaming_config
         self.speaker_label = speaker_label
+        self.on_partial = on_partial
         self.on_final = on_final
         self.on_error = on_error
-        self.audio_queue = queue.Queue(maxsize=128)
-        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.audio_queue = queue.Queue(maxsize=64)
+        self.thread = threading.Thread(target=self._run, daemon=True, name=f"asr-{speaker_label.lower()}")
         self.closed = False
         self.last_partial = ""
         self.final_emitted = False
@@ -36,23 +35,32 @@ class _StreamingSession:
         if self.closed or not pcm_bytes:
             return
         try:
-            self.audio_queue.put(pcm_bytes, timeout=0.05)
+            self.audio_queue.put_nowait(pcm_bytes)
+            return
         except queue.Full:
-            # Prefer dropping stale audio over building seconds of latency.
+            pass
+        try:
+            self.audio_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self.audio_queue.put_nowait(pcm_bytes)
+        except queue.Full:
             pass
 
-    def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        try:
-            self.audio_queue.put(self._STOP, timeout=0.1)
-        except queue.Full:
+    def close(self, join_timeout=0.0):
+        if not self.closed:
+            self.closed = True
             try:
-                self.audio_queue.get_nowait()
                 self.audio_queue.put_nowait(self._STOP)
-            except (queue.Empty, queue.Full):
-                pass
+            except queue.Full:
+                try:
+                    self.audio_queue.get_nowait()
+                    self.audio_queue.put_nowait(self._STOP)
+                except (queue.Empty, queue.Full):
+                    pass
+        if join_timeout and self.thread.is_alive() and threading.current_thread() is not self.thread:
+            self.thread.join(timeout=join_timeout)
 
     def _audio_chunks(self):
         while True:
@@ -78,8 +86,9 @@ class _StreamingSession:
                         if not self.final_emitted:
                             self.final_emitted = True
                             self.on_final(self.speaker_label, text)
-                    else:
+                    elif text != self.last_partial:
                         self.last_partial = text
+                        self.on_partial(self.speaker_label, text)
 
             if not self.final_emitted and self.last_partial:
                 self.final_emitted = True
@@ -89,6 +98,7 @@ class _StreamingSession:
 
 
 class STTWorker(QThread):
+    partial_transcription_ready = Signal(str, str)
     transcription_ready = Signal(str, str)
     status_updated = Signal(str)
     error_occurred = Signal(str)
@@ -96,64 +106,58 @@ class STTWorker(QThread):
     def __init__(self, audio_recorder, api_key=None):
         super().__init__()
         self.audio_recorder = audio_recorder
-        self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+        self.api_key = (api_key or os.environ.get("NVIDIA_API_KEY", "")).strip()
         self.running = False
 
         self.silence_threshold = float(os.environ.get("ASR_VAD_THRESHOLD", "0.005"))
-        self.silence_duration_limit = float(os.environ.get("ASR_ENDPOINT_SECONDS", "0.50"))
-        self.max_speech_duration = float(os.environ.get("ASR_MAX_UTTERANCE_SECONDS", "20"))
-
+        self.silence_duration_limit = float(os.environ.get("ASR_ENDPOINT_SECONDS", "0.40"))
+        self.max_speech_duration = float(os.environ.get("ASR_MAX_UTTERANCE_SECONDS", "30"))
         self.server = os.environ.get("NVIDIA_RIVA_SERVER", "grpc.nvcf.nvidia.com:443").strip()
         self.function_id = os.environ.get(
-            "NVIDIA_RIVA_FUNCTION_ID",
-            "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa",
+            "NVIDIA_RIVA_FUNCTION_ID", "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
         ).strip()
         self.language_code = os.environ.get("NVIDIA_RIVA_LANGUAGE", "en-US").strip()
 
         self._asr_service = None
         self._was_recording = False
-
         self.mic_speech_active = False
         self.mic_silence_start = None
         self.mic_speech_samples = 0
         self.mic_session = None
-
         self.system_speech_active = False
         self.system_silence_start = None
         self.system_speech_samples = 0
         self.system_session = None
 
     def set_api_key(self, api_key=None):
-        self.api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+        self.api_key = (api_key or os.environ.get("NVIDIA_API_KEY", "")).strip()
         self._asr_service = None
 
     def stop(self):
         self.running = False
-        self._close_all_sessions()
-        self.wait()
+        self._close_all_sessions(join_timeout=0.25)
+        if self.isRunning():
+            self.wait(1500)
 
     def _create_client(self):
         if riva is None:
             raise RuntimeError("nvidia-riva-client is not installed")
         if not self.api_key:
             raise RuntimeError("NVIDIA_API_KEY is not configured")
-
-        metadata = [
-            ["function-id", self.function_id],
-            ["authorization", f"Bearer {self.api_key}"],
-        ]
         auth = riva.client.Auth(
             use_ssl=True,
             uri=self.server,
-            metadata_args=metadata,
+            metadata_args=[
+                ["function-id", self.function_id],
+                ["authorization", f"Bearer {self.api_key}"],
+            ],
         )
         return riva.client.ASRService(auth)
 
     def _ensure_client(self):
         if self._asr_service is None:
-            self.set_api_key()
             self._asr_service = self._create_client()
-            print("[stt] NVIDIA Nemotron ASR Streaming client initialized.")
+            print("[stt] NVIDIA Nemotron streaming ASR client initialized.")
         return self._asr_service
 
     def _build_streaming_config(self):
@@ -169,8 +173,7 @@ class STTWorker(QThread):
             config=recognition_config,
             interim_results=True,
         )
-
-        endpoint_ms = max(300, int(self.silence_duration_limit * 1000))
+        endpoint_ms = max(280, int(self.silence_duration_limit * 1000))
         try:
             riva.client.add_endpoint_parameters_to_config(
                 streaming_config,
@@ -190,6 +193,7 @@ class STTWorker(QThread):
             self._ensure_client(),
             self._build_streaming_config(),
             speaker_label,
+            self._on_partial_transcript,
             self._on_final_transcript,
             self._on_stream_error,
         )
@@ -199,6 +203,11 @@ class STTWorker(QThread):
     @staticmethod
     def _to_pcm16(audio_chunk):
         return (np.clip(audio_chunk, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+
+    def _on_partial_transcript(self, speaker_label, text):
+        text = text.strip()
+        if text:
+            self.partial_transcription_ready.emit(speaker_label, text)
 
     def _on_final_transcript(self, speaker_label, text):
         text = text.strip()
@@ -211,10 +220,8 @@ class STTWorker(QThread):
         self.error_occurred.emit(message)
         self._asr_service = None
 
-    def _close_all_sessions(self):
-        for session in (self.mic_session, self.system_session):
-            if session is not None:
-                session.close()
+    def _close_all_sessions(self, join_timeout=0.0):
+        sessions = [self.mic_session, self.system_session]
         self.mic_session = None
         self.system_session = None
         self.mic_speech_active = False
@@ -223,16 +230,17 @@ class STTWorker(QThread):
         self.system_silence_start = None
         self.mic_speech_samples = 0
         self.system_speech_samples = 0
+        for session in sessions:
+            if session is not None:
+                session.close(join_timeout=join_timeout)
 
     def run(self):
         self.running = True
-        self.status_updated.emit("Nemotron real-time ASR ready...")
-        print("[stt] NVIDIA Nemotron streaming worker started.")
-
+        self.status_updated.emit("NVIDIA Nemotron real-time ASR ready")
         while self.running:
             if not self.audio_recorder.is_recording:
                 if self._was_recording:
-                    self._close_all_sessions()
+                    self._close_all_sessions(join_timeout=0.1)
                     self._was_recording = False
                 time.sleep(0.03)
                 continue
@@ -247,33 +255,35 @@ class STTWorker(QThread):
 
             mic_chunk, system_chunk = self.audio_recorder.get_next_audio_chunks()
             now = time.monotonic()
-
-            if mic_chunk is not None and len(mic_chunk) > 0:
+            if mic_chunk is not None and len(mic_chunk):
                 self._process_stream(mic_chunk, "Candidate", now)
-            if system_chunk is not None and len(system_chunk) > 0:
+            if system_chunk is not None and len(system_chunk):
                 self._process_stream(system_chunk, "Interviewer", now)
+            time.sleep(0.015)
 
-            time.sleep(0.02)
-
-        self._close_all_sessions()
+        self._close_all_sessions(join_timeout=0.25)
         print("[stt] NVIDIA Nemotron streaming worker stopped.")
 
     def _process_stream(self, audio_chunk, speaker_label, current_time):
-        rms = np.sqrt(np.mean(audio_chunk ** 2)) if len(audio_chunk) else 0.0
+        rms = float(np.sqrt(np.mean(audio_chunk ** 2))) if len(audio_chunk) else 0.0
         active_chunk = rms > self.silence_threshold
         pcm = self._to_pcm16(audio_chunk)
         is_mic = speaker_label == "Candidate"
 
         if is_mic:
-            speech_active = self.mic_speech_active
-            silence_start = self.mic_silence_start
-            speech_samples = self.mic_speech_samples
-            session = self.mic_session
+            speech_active, silence_start, speech_samples, session = (
+                self.mic_speech_active,
+                self.mic_silence_start,
+                self.mic_speech_samples,
+                self.mic_session,
+            )
         else:
-            speech_active = self.system_speech_active
-            silence_start = self.system_silence_start
-            speech_samples = self.system_speech_samples
-            session = self.system_session
+            speech_active, silence_start, speech_samples, session = (
+                self.system_speech_active,
+                self.system_silence_start,
+                self.system_speech_samples,
+                self.system_session,
+            )
 
         if active_chunk:
             if not speech_active:
@@ -287,7 +297,6 @@ class STTWorker(QThread):
             session.feed(pcm)
             speech_samples += len(audio_chunk)
             silence_start = None
-
         elif speech_active and session is not None:
             session.feed(pcm)
             speech_samples += len(audio_chunk)
@@ -301,7 +310,7 @@ class STTWorker(QThread):
                 speech_samples = 0
 
         duration = speech_samples / self.audio_recorder.sample_rate
-        if speech_active and duration >= self.max_speech_duration:
+        if speech_active and duration >= self.max_speech_duration and session is not None:
             session.close()
             session = None
             speech_active = False

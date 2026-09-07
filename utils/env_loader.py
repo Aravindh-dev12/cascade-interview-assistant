@@ -8,7 +8,12 @@ SUPPORTED_ENV_FILES = (".env", ".env.local", ".env.txt", "env")
 
 
 def load_project_env(project_dir: Path):
-    """Load local project secrets/config robustly without ever printing values."""
+    """Load local project secrets/config robustly without ever printing values.
+
+    The first existing supported env file is loaded with override=True so stale or
+    blank Windows environment variables cannot mask values from the project's .env.
+    A few common aliases are normalized to the canonical names used by the app.
+    """
     project_dir = Path(project_dir).resolve()
     selected = None
 
@@ -19,6 +24,9 @@ def load_project_env(project_dir: Path):
             break
 
     if selected is not None:
+        # For this desktop app, the project-local env file is the intended source
+        # of truth. This also fixes the case where Windows has an empty variable
+        # with the same name already defined.
         load_dotenv(selected, override=True)
         parsed = dotenv_values(selected)
     else:

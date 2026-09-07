@@ -1,203 +1,271 @@
 import os
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QMessageBox,
     QPushButton,
     QSlider,
     QSpinBox,
     QVBoxLayout,
 )
 
+import config
 from engine.audio_recorder import AudioRecorder
 from ui.region_selector import RegionSelector
-import config
 
-
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+GEMINI_MODELS = ("gemini-2.5-flash", "gemini-2.5-pro")
 
 
 class SettingsDialog(QDialog):
-    settings_saved = Signal(dict)
-
     def __init__(self, current_settings, parent=None):
         super().__init__(parent)
         self.settings = current_settings.copy()
-        self.setWindowTitle("quntumnintent - Settings")
-        self.setMinimumWidth(480)
-        self.resize(500, 620)
+        self.selector = None
+        self.setWindowTitle("quntumnintent settings")
+        self.setMinimumSize(620, 700)
+        self.resize(680, 760)
         self._apply_style()
-        self.init_ui()
-        self.load_devices_and_populate()
+        self._build_ui()
+        self._load_devices()
 
     def _apply_style(self):
         self.setStyleSheet("""
-            QDialog { background-color: #1A1A1E; color: #E2E8F0; font-family: 'Segoe UI', Arial, sans-serif; }
-            QLabel { color: #A0AEC0; font-size: 13px; font-weight: 500; }
-            QGroupBox { border: 1px solid #2D3748; border-radius: 8px; margin-top: 15px; padding-top: 15px; font-weight: bold; color: #63B3ED; }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 8px; background-color: #1A1A1E; }
-            QLineEdit, QComboBox, QSpinBox { background-color: #2D3748; border: 1px solid #4A5568; border-radius: 6px; padding: 6px 10px; color: #F7FAFC; font-size: 13px; }
-            QPushButton { background-color: #3182CE; color: white; border: none; border-radius: 6px; padding: 8px 16px; font-weight: bold; font-size: 13px; }
-            QPushButton:hover { background-color: #4299E1; }
-            QPushButton#cancelBtn { background-color: #4A5568; }
-            QPushButton#regionBtn { background-color: #2D3748; border: 1px dashed #63B3ED; color: #63B3ED; }
-            QCheckBox { color: #E2E8F0; font-size: 13px; }
-            QSlider::handle:horizontal { background: #3182CE; width: 14px; margin: -5px 0; border-radius: 7px; }
-            QSlider::groove:horizontal { height: 4px; background: #4A5568; }
+            QDialog { background:#070B12; color:#E7EEF8; font-family:'Segoe UI',Arial; font-size:13px; }
+            QLabel { color:#C9D5E5; }
+            QLabel#title { color:white; font-size:20px; font-weight:700; }
+            QLabel#muted { color:#75859B; font-size:11px; }
+            QFrame#card { background:#0C1420; border:1px solid #1F2C3E; border-radius:10px; }
+            QComboBox, QSpinBox { min-height:34px; background:#111B2A; color:#F8FAFC; border:1px solid #2A3A50; border-radius:7px; padding:0 8px; }
+            QCheckBox { color:#CAD5E3; spacing:8px; }
+            QSlider::groove:horizontal { height:4px; background:#2A3A50; border-radius:2px; }
+            QSlider::sub-page:horizontal { background:#3B82F6; }
+            QSlider::handle:horizontal { width:16px; margin:-6px 0; background:#F8FAFC; border:2px solid #2563EB; border-radius:8px; }
+            QPushButton { min-height:34px; border-radius:7px; padding:0 14px; font-weight:650; }
+            QPushButton#primary { background:#2563EB; color:white; border:1px solid #3B82F6; }
+            QPushButton#secondary { background:transparent; color:#B8C5D6; border:1px solid #334155; }
         """)
 
-    def init_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
+    def _card(self, title, subtitle=None):
+        card = QFrame()
+        card.setObjectName("card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
+        heading = QLabel(title)
+        heading.setStyleSheet("font-weight:700; color:#F8FAFC;")
+        layout.addWidget(heading)
+        if subtitle:
+            text = QLabel(subtitle)
+            text.setObjectName("muted")
+            text.setWordWrap(True)
+            layout.addWidget(text)
+        return card, layout
 
-        ai_group = QGroupBox("Gemini Answer Configuration")
-        ai_layout = QFormLayout()
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
 
+        title = QLabel("Assistant settings")
+        title.setObjectName("title")
+        root.addWidget(title)
+        subtitle = QLabel("Credentials load from the project env file. Practice automation is enabled only when PRACTICE_MODE=1.")
+        subtitle.setObjectName("muted")
+        subtitle.setWordWrap(True)
+        root.addWidget(subtitle)
+
+        ai_card, ai_layout = self._card(
+            "AI + live voice",
+            "Gemini handles text/vision reasoning. NVIDIA Nemotron/Riva handles streaming speech-to-text.",
+        )
+        ai_form = QFormLayout()
         self.model_combo = QComboBox()
         self.model_combo.addItems(GEMINI_MODELS)
-        current_model = self.settings.get("model", "gemini-2.5-flash")
-        index = self.model_combo.findText(current_model)
-        self.model_combo.setCurrentIndex(index if index >= 0 else 0)
+        current_model = self.settings.get("model", config.DEFAULT_GEMINI_MODEL)
+        idx = self.model_combo.findText(current_model)
+        self.model_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        ai_form.addRow("Gemini model", self.model_combo)
+        self.auto_start_check = QCheckBox("Start listening automatically")
+        self.auto_start_check.setChecked(self.settings.get("auto_start_listening", True))
+        self.auto_answer_check = QCheckBox("Answer substantive interviewer questions automatically")
+        self.auto_answer_check.setChecked(self.settings.get("auto_answer_speech", True))
+        ai_layout.addLayout(ai_form)
+        ai_layout.addWidget(self.auto_start_check)
+        ai_layout.addWidget(self.auto_answer_check)
+        status = QLabel(
+            f"Gemini: {'connected' if os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') else 'key missing'}  ·  "
+            f"NVIDIA: {'connected' if os.environ.get('NVIDIA_API_KEY') else 'key missing'}"
+        )
+        status.setObjectName("muted")
+        ai_layout.addWidget(status)
+        root.addWidget(ai_card)
 
-        self.key_input = QLineEdit()
-        self.key_input.setEchoMode(QLineEdit.Password)
-        self.key_input.setText(self.settings.get("api_key", ""))
-        self.key_input.setPlaceholderText("Blank = use GEMINI_API_KEY from .env")
-
-        self.show_key_check = QCheckBox("Show Gemini API Key")
-        self.show_key_check.stateChanged.connect(self.toggle_key_visibility)
-
-        ai_layout.addRow("Provider:", QLabel("Gemini only"))
-        ai_layout.addRow("Model:", self.model_combo)
-        ai_layout.addRow("Gemini API Key:", self.key_input)
-        ai_layout.addRow("", self.show_key_check)
-        ai_group.setLayout(ai_layout)
-        main_layout.addWidget(ai_group)
-
-        audio_group = QGroupBox("Audio Sources — NVIDIA Nemotron STT")
-        audio_layout = QFormLayout()
+        audio_card, audio_layout = self._card("Audio routing", "Choose the candidate microphone and an input-capable Windows loopback/system source.")
+        audio_form = QFormLayout()
         self.mic_combo = QComboBox()
         self.system_combo = QComboBox()
-        audio_layout.addRow("Microphone:", self.mic_combo)
-        audio_layout.addRow("Laptop/System Audio:", self.system_combo)
-        audio_group.setLayout(audio_layout)
-        main_layout.addWidget(audio_group)
+        audio_form.addRow("Microphone", self.mic_combo)
+        audio_form.addRow("System audio", self.system_combo)
+        audio_layout.addLayout(audio_form)
+        root.addWidget(audio_card)
 
-        capture_group = QGroupBox("Screen Capture Region — Gemini Vision")
-        capture_layout = QVBoxLayout()
+        screen_card, screen_layout = self._card(
+            "Real-time screen context",
+            "The watcher captures locally and only emits a frame after a meaningful visual change becomes stable. While live listening is active it updates context without competing with the speech answer request.",
+        )
+        self.screen_watch_check = QCheckBox("Continuously watch the selected screen/region")
+        self.screen_watch_check.setChecked(self.settings.get("auto_screen_watch", True))
+        self.screen_answer_check = QCheckBox("Automatically answer stable screen-only questions when not listening")
+        self.screen_answer_check.setChecked(self.settings.get("auto_answer_screen", True))
+        self.include_screen_check = QCheckBox("Attach recent screen context when speech refers to visible code/error/question")
+        self.include_screen_check.setChecked(self.settings.get("include_screen_with_speech", True))
+        screen_layout.addWidget(self.screen_watch_check)
+        screen_layout.addWidget(self.screen_answer_check)
+        screen_layout.addWidget(self.include_screen_check)
+
+        screen_form = QFormLayout()
+        self.screen_interval_spin = QSpinBox()
+        self.screen_interval_spin.setRange(300, 3000)
+        self.screen_interval_spin.setSingleStep(50)
+        self.screen_interval_spin.setSuffix(" ms")
+        self.screen_interval_spin.setValue(int(self.settings.get("screen_watch_interval_ms", 650)))
+        self.screen_stable_spin = QSpinBox()
+        self.screen_stable_spin.setRange(200, 2000)
+        self.screen_stable_spin.setSingleStep(50)
+        self.screen_stable_spin.setSuffix(" ms")
+        self.screen_stable_spin.setValue(int(self.settings.get("screen_stable_ms", 450)))
+        screen_form.addRow("Capture interval", self.screen_interval_spin)
+        screen_form.addRow("Stable before use", self.screen_stable_spin)
+        screen_layout.addLayout(screen_form)
+
+        region_row = QHBoxLayout()
         self.region_label = QLabel()
-        self.update_region_label()
-        self.select_region_btn = QPushButton("Select Screen Capture Region")
-        self.select_region_btn.setObjectName("regionBtn")
-        self.select_region_btn.clicked.connect(self.start_region_selection)
-        capture_layout.addWidget(self.region_label)
-        capture_layout.addWidget(self.select_region_btn)
-        capture_group.setLayout(capture_layout)
-        main_layout.addWidget(capture_group)
+        self.region_label.setObjectName("muted")
+        self._update_region_label()
+        region_btn = QPushButton("Select region")
+        region_btn.setObjectName("secondary")
+        region_btn.clicked.connect(self._start_region_selection)
+        clear_region_btn = QPushButton("Use monitor")
+        clear_region_btn.setObjectName("secondary")
+        clear_region_btn.clicked.connect(self._clear_region)
+        region_row.addWidget(self.region_label, 1)
+        region_row.addWidget(region_btn)
+        region_row.addWidget(clear_region_btn)
+        screen_layout.addLayout(region_row)
+        root.addWidget(screen_card)
 
-        ui_group = QGroupBox("Overlay Preferences")
-        ui_layout = QFormLayout()
-        self.invisible_check = QCheckBox("Protected Window")
-        self.invisible_check.setChecked(self.settings.get("invisible_mode", True))
-        self.always_on_top_check = QCheckBox("Always on Top")
+        overlay_card, overlay_layout = self._card(
+            "Overlay",
+            "Screen-capture exclusion is off by default. Enable it only when that behavior is appropriate for your permitted practice setup.",
+        )
+        self.invisible_check = QCheckBox("Exclude overlay from supported Windows capture APIs")
+        self.invisible_check.setChecked(self.settings.get("invisible_mode", False))
+        self.always_on_top_check = QCheckBox("Keep overlay always on top")
         self.always_on_top_check.setChecked(self.settings.get("always_on_top", True))
+        overlay_layout.addWidget(self.invisible_check)
+        overlay_layout.addWidget(self.always_on_top_check)
+
+        overlay_form = QFormLayout()
         self.opacity_slider = QSlider(Qt.Horizontal)
-        self.opacity_slider.setRange(50, 100)
-        self.opacity_slider.setValue(int(self.settings.get("window_opacity", 0.90) * 100))
-        self.opacity_label = QLabel(f"{self.opacity_slider.value()}%")
-        self.opacity_slider.valueChanged.connect(lambda value: self.opacity_label.setText(f"{value}%"))
-        opacity_row = QHBoxLayout()
-        opacity_row.addWidget(self.opacity_slider)
-        opacity_row.addWidget(self.opacity_label)
+        self.opacity_slider.setRange(55, 100)
+        self.opacity_slider.setValue(int(float(self.settings.get("window_opacity", 0.94)) * 100))
         self.font_size_spin = QSpinBox()
-        self.font_size_spin.setRange(10, 24)
-        self.font_size_spin.setValue(self.settings.get("font_size", 13))
-        ui_layout.addRow("Privacy Protect:", self.invisible_check)
-        ui_layout.addRow("Keep On Top:", self.always_on_top_check)
-        ui_layout.addRow("Overlay Opacity:", opacity_row)
-        ui_layout.addRow("Text Size:", self.font_size_spin)
-        ui_group.setLayout(ui_layout)
-        main_layout.addWidget(ui_group)
+        self.font_size_spin.setRange(11, 22)
+        self.font_size_spin.setValue(int(self.settings.get("font_size", 13)))
+        overlay_form.addRow("Opacity", self.opacity_slider)
+        overlay_form.addRow("Answer font size", self.font_size_spin)
+        overlay_layout.addLayout(overlay_form)
+        root.addWidget(overlay_card)
 
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setObjectName("cancelBtn")
-        cancel_btn.clicked.connect(self.reject)
-        save_btn = QPushButton("Save Settings")
-        save_btn.clicked.connect(self.save_and_accept)
-        buttons.addWidget(cancel_btn)
-        buttons.addWidget(save_btn)
-        main_layout.addLayout(buttons)
+        root.addStretch()
+        footer = QHBoxLayout()
+        footer.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("secondary")
+        cancel.clicked.connect(self.reject)
+        save = QPushButton("Save changes")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        footer.addWidget(cancel)
+        footer.addWidget(save)
+        root.addLayout(footer)
 
-    def toggle_key_visibility(self, state):
-        self.key_input.setEchoMode(QLineEdit.Normal if state == Qt.Checked.value else QLineEdit.Password)
+    def _load_devices(self):
+        mics, loopbacks = AudioRecorder.list_devices()
+        self.mic_combo.clear()
+        self.system_combo.clear()
+        self.mic_combo.addItem("Disabled", -1)
+        self.system_combo.addItem("Disabled", -1)
+        for item in mics:
+            self.mic_combo.addItem(f"{item['name']} · {item.get('api', 'Audio')}", item["index"])
+        for item in loopbacks:
+            if item.get("index", -1) >= 0:
+                self.system_combo.addItem(f"{item['name']} · {item.get('api', 'Loopback')}", item["index"])
+        mic_idx = self.mic_combo.findData(self.settings.get("mic_device_idx", -1))
+        sys_idx = self.system_combo.findData(self.settings.get("system_device_idx", -1))
+        self.mic_combo.setCurrentIndex(mic_idx if mic_idx >= 0 else 0)
+        self.system_combo.setCurrentIndex(sys_idx if sys_idx >= 0 else 0)
 
-    def update_region_label(self):
+    def _update_region_label(self):
         region = self.settings.get("capture_region")
-        if region is None:
-            self.region_label.setText("Active Region: Full Screen")
+        if not region:
+            self.region_label.setText("Watching the monitor containing the overlay")
         else:
             self.region_label.setText(
-                f"Active Region: ({region.get('left', 0)}, {region.get('top', 0)}) "
-                f"{region.get('width', 0)}x{region.get('height', 0)}"
+                f"Region {region.get('width', 0)}×{region.get('height', 0)} at ({region.get('left', 0)}, {region.get('top', 0)})"
             )
 
-    def load_devices_and_populate(self):
-        mics, loopbacks = AudioRecorder.list_devices()
-        self.mic_combo.addItem("Disabled / None", -1)
-        self.system_combo.addItem("Disabled / None", -1)
-        for item in mics:
-            self.mic_combo.addItem(f"{item['name']} ({item.get('api', 'Audio')})", item['index'])
-        for item in loopbacks:
-            self.system_combo.addItem(f"{item['name']} ({item.get('api', 'Loopback')})", item['index'])
-        mic_index = self.mic_combo.findData(self.settings.get("mic_device_idx", -1))
-        self.mic_combo.setCurrentIndex(mic_index if mic_index >= 0 else 0)
-        sys_index = self.system_combo.findData(self.settings.get("system_device_idx", -1))
-        self.system_combo.setCurrentIndex(sys_index if sys_index >= 0 else 0)
-
-    def start_region_selection(self):
+    def _start_region_selection(self):
         self.hide()
         self.selector = RegionSelector()
-        self.selector.region_selected.connect(self.on_region_selected)
+        self.selector.region_selected.connect(self._on_region_selected)
+        self.selector.destroyed.connect(self._restore_after_selector)
         self.selector.show()
-        self.selector.activateWindow()
         self.selector.raise_()
+        self.selector.activateWindow()
 
-    def on_region_selected(self, top, left, width, height):
-        self.settings["capture_region"] = {"top": top, "left": left, "width": width, "height": height}
-        self.update_region_label()
+    def _restore_after_selector(self):
+        if not self.isVisible():
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+    def _on_region_selected(self, top, left, width, height):
+        self.settings["capture_region"] = {
+            "top": int(top),
+            "left": int(left),
+            "width": int(width),
+            "height": int(height),
+        }
+        self._update_region_label()
         self.show()
         self.raise_()
         self.activateWindow()
 
-    def save_and_accept(self):
-        self.settings["provider"] = "gemini"
+    def _clear_region(self):
+        self.settings["capture_region"] = None
+        self._update_region_label()
+
+    def _save(self):
         self.settings["model"] = self.model_combo.currentText()
-        self.settings["api_key"] = self.key_input.text().strip()
+        self.settings["auto_start_listening"] = self.auto_start_check.isChecked()
+        self.settings["auto_answer_speech"] = self.auto_answer_check.isChecked()
         self.settings["mic_device_idx"] = self.mic_combo.currentData()
         self.settings["system_device_idx"] = self.system_combo.currentData()
+        self.settings["auto_screen_watch"] = self.screen_watch_check.isChecked()
+        self.settings["auto_answer_screen"] = self.screen_answer_check.isChecked()
+        self.settings["include_screen_with_speech"] = self.include_screen_check.isChecked()
+        self.settings["screen_watch_interval_ms"] = self.screen_interval_spin.value()
+        self.settings["screen_stable_ms"] = self.screen_stable_spin.value()
         self.settings["invisible_mode"] = self.invisible_check.isChecked()
         self.settings["always_on_top"] = self.always_on_top_check.isChecked()
         self.settings["window_opacity"] = self.opacity_slider.value() / 100.0
         self.settings["font_size"] = self.font_size_spin.value()
-
-        if not self.settings["api_key"] and not os.environ.get("GEMINI_API_KEY", "").strip():
-            QMessageBox.warning(
-                self,
-                "Gemini API Key Missing",
-                "Add a Gemini API key here or set GEMINI_API_KEY in .env.",
-            )
-
         config.save_settings(self.settings)
-        self.settings_saved.emit(self.settings)
         self.accept()

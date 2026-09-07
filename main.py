@@ -2,6 +2,7 @@ import sys
 import os
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -11,6 +12,7 @@ from utils.env_loader import load_project_env
 env_status = load_project_env(PROJECT_DIR)
 
 from ui.overlay_window import OverlayWindow
+from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.mouse_passthrough import MousePassthroughController
 from utils.screen_capture_controls import ScreenCaptureControls
 
@@ -39,12 +41,25 @@ def main():
     mouse_passthrough = MousePassthroughController(window)
     window.mouse_passthrough_controller = mouse_passthrough
 
+    audio_device_monitor = AudioDeviceMonitor(window)
+    window.audio_device_monitor = audio_device_monitor
+
     window.raise_()
     window.activateWindow()
 
+    # Start hands-free listening automatically only in explicitly enabled practice
+    # mode. API keys are loaded directly from the project-local .env; the user does
+    # not need to paste credentials into Settings.
+    if (
+        window.settings.get("auto_start_listening", True)
+        and env_status["practice_mode"]
+        and env_status["nvidia_loaded"]
+    ):
+        QTimer.singleShot(350, window.toggle_recording)
+
     print("[main] quntumnintent running.")
-    print("Press Ctrl+Shift+S globally to Capture Region & Analyze with Gemini.")
-    print("Press Ctrl+Shift+A globally to Toggle NVIDIA Voice Listening.")
+    print("Press Ctrl+Shift+S globally to Capture Region & Answer.")
+    print("Press Ctrl+Shift+A globally to Toggle Voice Listening.")
 
     sys.exit(app.exec())
 

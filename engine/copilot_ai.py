@@ -14,22 +14,18 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 KB_PATH = PROJECT_DIR / "data" / "interview_knowledge.json"
 
 SYSTEM_PROMPT = (
-    "You are a concise technical interview practice coach. Answer naturally in first person "
-    "when the question is about the candidate's experience. Lead with the direct answer, then "
-    "give 2-4 concrete supporting points. Never invent resume details, metrics, datasets, tools, "
-    "or implementation facts. For coding questions, first reconstruct the complete problem and "
-    "constraints, then give the approach and compact correct code when the language is clear, "
-    "followed by time and space complexity. For MCQs, state the best option first and briefly "
-    "justify it. For math, solve carefully and verify arithmetic. For architecture questions, "
-    "reason from objective, observations, actions, state, uncertainty, planning, feedback, "
-    "evaluation, and failure modes before naming frameworks."
+    "You are a low-latency technical interview practice coach. Give the candidate-ready answer immediately. "
+    "Be concise, natural, and decisive. For conceptual questions, start with a 20-40 second spoken answer, "
+    "then add only essential supporting points. For MCQs, put the best option on the first line. For coding "
+    "questions, detect the requested language, give the approach briefly, then correct code, then time/space "
+    "complexity. For debugging, identify the bug and corrected code. Use screenshot details when supplied. "
+    "Never invent personal experience, resume facts, metrics, or project details that are not present in the "
+    "provided practice context. Do not repeat the question and do not add filler."
 )
 
 
 def _practice_mode_enabled():
-    return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+    return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _load_interview_knowledge():
@@ -42,54 +38,48 @@ def _load_interview_knowledge():
 
 
 class CopilotAI:
-    """Gemini-only practice answer and vision engine.
+    """Gemini text/vision engine with transcript and optional multi-frame practice context."""
 
-    NVIDIA speech-to-text is handled separately by STTWorker. Interview context
-    and multi-frame screenshot accumulation are used only in practice/permitted mode.
-    """
-
-    def __init__(self, provider="gemini", model=None, api_key=None):
+    def __init__(self, model=None, api_key=None, provider=None):
         self.provider = "gemini"
         self.model = self._normalize_model(model)
         self.api_key = self._resolve_key(api_key)
         self._gemini_client = None
         self.interview_knowledge = _load_interview_knowledge()
         self.transcript_history = []
-        self.max_transcript_history = 12
+        self.max_transcript_history = max(4, int(os.environ.get("TRANSCRIPT_CONTEXT_LINES", "12")))
         self.image_history = []
         self.image_fingerprints = []
-        self.max_image_history = max(
-            1, int(os.environ.get("PRACTICE_IMAGE_CONTEXT_FRAMES", "6"))
-        )
+        self.max_image_history = max(1, int(os.environ.get("PRACTICE_IMAGE_CONTEXT_FRAMES", "3")))
 
     @staticmethod
     def _normalize_model(model):
         model = str(model or "").strip()
-        return model if model.startswith("gemini-2.5-") else DEFAULT_GEMINI_MODEL
+        return model if model.startswith("gemini-") else DEFAULT_GEMINI_MODEL
 
     @staticmethod
     def _resolve_key(api_key=None):
         supplied = (api_key or "").strip()
         if supplied:
             return supplied
-        return (
-            os.environ.get("GEMINI_API_KEY", "").strip()
-            or os.environ.get("GOOGLE_API_KEY", "").strip()
-        )
+        return os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
 
-    def set_config(self, provider=None, model=None, api_key=None):
+    def set_config(self, model=None, api_key=None, provider=None):
         next_model = self._normalize_model(model)
         next_key = self._resolve_key(api_key)
         if next_key != self.api_key:
             self._gemini_client = None
-        self.provider = "gemini"
         self.model = next_model
         self.api_key = next_key
+        self.provider = "gemini"
 
     def add_transcript_line(self, speaker, text):
+        text = str(text or "").strip()
+        if not text:
+            return
         self.transcript_history.append({"speaker": speaker, "text": text})
         if len(self.transcript_history) > self.max_transcript_history:
-            self.transcript_history.pop(0)
+            del self.transcript_history[:-self.max_transcript_history]
 
     def clear_history(self):
         self.transcript_history.clear()
@@ -99,30 +89,24 @@ class CopilotAI:
     def get_formatted_transcript(self):
         if not self.transcript_history:
             return "[No conversation recorded yet]"
-        return "\n".join(
-            f"{item['speaker']}: {item['text']}" for item in self.transcript_history
-        )
+        return "\n".join(f"{item['speaker']}: {item['text']}" for item in self.transcript_history)
 
     def _knowledge_context(self):
         if not _practice_mode_enabled() or not self.interview_knowledge:
             return ""
-        return json.dumps(self.interview_knowledge, ensure_ascii=False, indent=2)
+        return json.dumps(self.interview_knowledge, ensure_ascii=False, separators=(",", ":"))
 
     def _build_prompt(self, custom_query=None, image_task=None):
-        transcript = self.get_formatted_transcript()
-        task = custom_query or "Answer the latest substantive question in this mock interview transcript."
-        knowledge = self._knowledge_context()
-
+        task = custom_query or "Answer the latest substantive interviewer question in the practice transcript."
         parts = []
+        knowledge = self._knowledge_context()
         if knowledge:
             parts.append(
-                "Interview practice knowledge base. Treat this as candidate/role context. "
-                "Use it for both common interview questions and role-specific questions when relevant, "
-                "but never invent facts beyond it:\n" + knowledge
+                "Candidate/role practice context follows. Use only when relevant; never invent beyond it:\n" + knowledge
             )
-        parts.append("Conversation transcript:\n" + transcript)
+        parts.append("Recent transcript:\n" + self.get_formatted_transcript())
         if image_task:
-            parts.append("Image-analysis instructions:\n" + image_task)
+            parts.append("Screen context instructions:\n" + image_task)
         parts.append("Current task:\n" + task)
         return "\n\n".join(parts)
 
@@ -131,74 +115,51 @@ class CopilotAI:
         from PIL import Image
 
         image = Image.open(io.BytesIO(image_bytes)).convert("L").resize((32, 32))
-        return bytes(image.tobytes())
+        return image.tobytes()
 
     @staticmethod
     def _fingerprint_distance(left, right):
         if not left or not right or len(left) != len(right):
             return 1.0
-        total = sum(abs(a - b) for a, b in zip(left, right))
-        return total / (255.0 * len(left))
+        return sum(abs(a - b) for a, b in zip(left, right)) / (255.0 * len(left))
 
     def _remember_image(self, image_bytes):
         try:
-            fingerprint = self._image_fingerprint(image_bytes)
+            fp = self._image_fingerprint(image_bytes)
         except Exception:
-            fingerprint = b""
+            fp = b""
 
-        duplicate_threshold = float(
-            os.environ.get("PRACTICE_IMAGE_DUPLICATE_THRESHOLD", "0.012")
-        )
-        if self.image_fingerprints and fingerprint:
-            distance = self._fingerprint_distance(
-                self.image_fingerprints[-1], fingerprint
-            )
-            if distance <= duplicate_threshold:
+        duplicate_threshold = float(os.environ.get("PRACTICE_IMAGE_DUPLICATE_THRESHOLD", "0.012"))
+        if self.image_fingerprints and fp:
+            if self._fingerprint_distance(self.image_fingerprints[-1], fp) <= duplicate_threshold:
                 self.image_history[-1] = image_bytes
-                self.image_fingerprints[-1] = fingerprint
-                return len(self.image_history)
+                self.image_fingerprints[-1] = fp
+                return
 
         self.image_history.append(image_bytes)
-        self.image_fingerprints.append(fingerprint)
+        self.image_fingerprints.append(fp)
         if len(self.image_history) > self.max_image_history:
-            self.image_history.pop(0)
-            self.image_fingerprints.pop(0)
-        return len(self.image_history)
+            del self.image_history[:-self.max_image_history]
+            del self.image_fingerprints[:-self.max_image_history]
 
     def _get_gemini_client(self):
         if not self.api_key:
             self.api_key = self._resolve_key()
         if not self.api_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured")
+            raise RuntimeError("GEMINI_API_KEY is not configured in the project env file")
         if self._gemini_client is None:
             self._gemini_client = genai.Client(api_key=self.api_key)
         return self._gemini_client
 
-    def _collect_fast(self, stream):
-        pieces = []
-        total_chars = 0
-        min_chars = int(os.environ.get("GEMINI_FAST_MIN_CHARS", "140"))
-        hard_chars = int(os.environ.get("GEMINI_FAST_MAX_CHARS", "1200"))
-        for piece in stream:
-            if not piece:
-                continue
-            pieces.append(piece)
-            total_chars += len(piece)
-            joined = "".join(pieces)
-            if total_chars >= min_chars and joined.rstrip().endswith((".", "!", "?", "```")):
-                break
-            if total_chars >= hard_chars:
-                break
-        return "".join(pieces).strip()
-
     def _gemini_stream(self, contents, max_tokens=None):
+        thinking_budget = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
         response = self._get_gemini_client().models.generate_content_stream(
             model=self.model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=max_tokens
-                or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "512")),
+                max_output_tokens=max_tokens or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "700")),
+                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
             ),
         )
         for chunk in response:
@@ -206,56 +167,60 @@ class CopilotAI:
             if text:
                 yield text
 
-    def generate_text_answer(self, custom_query=None):
-        return self._collect_fast(self._gemini_stream(self._build_prompt(custom_query)))
+    def generate_text_stream(self, custom_query=None):
+        yield from self._gemini_stream(self._build_prompt(custom_query))
 
-    def generate_vision_answer(self, image_bytes, custom_query=None):
-        frame_count = self._remember_image(image_bytes)
-        image_rules = self.interview_knowledge.get("practice_image_tasks", {}) if self.interview_knowledge else {}
-        image_task = "\n".join(f"- {name}: {rule}" for name, rule in image_rules.items())
-        image_task += (
-            f"\n- scrolling-context: You are receiving {frame_count} chronological screenshot frame(s) "
-            "from the same practice problem/session, oldest first and newest last. Reconstruct one complete "
-            "problem by combining text across all frames, deduplicating overlapping sections caused by scrolling. "
-            "Preserve the exact visible constraints, examples, function signature, starter code, and requested "
-            "output format. Do not treat the newest frame as a separate problem unless the content clearly changed. "
-            "If essential information is still missing, say exactly which section should be captured next instead "
-            "of guessing."
-        )
-        prompt = self._build_prompt(
-            custom_query or (
-                "Identify exactly what the combined screenshots ask, reconstruct the full problem across scrolls, "
-                "then solve it. It may be a HackerRank-style coding prompt, MCQ, mathematics problem, diagram, "
-                "or system-design question."
-            ),
-            image_task=image_task,
-        )
-
+    def generate_vision_stream(self, image_bytes, custom_query=None, use_image_history=False):
         from PIL import Image
 
-        contents = [prompt]
-        for frame in self.image_history:
-            contents.append(Image.open(io.BytesIO(frame)).convert("RGB"))
+        if use_image_history:
+            self._remember_image(image_bytes)
+            frames = list(self.image_history)
+        else:
+            frames = [image_bytes]
 
-        print(f"[vision] Using {len(self.image_history)} practice screenshot frame(s) as context.")
-        return self._collect_fast(
-            self._gemini_stream(
-                contents,
-                max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "1400")),
-            )
+        image_task = (
+            "Read visible text/code carefully. Determine whether this is a coding problem, MCQ, debugging task, "
+            "terminal error, diagram, system-design prompt, or conceptual question. Use all supplied frames as one "
+            "chronological problem context when multiple frames are present. Deduplicate overlap caused by scrolling. "
+            "Do not guess missing constraints."
+        )
+        prompt = self._build_prompt(
+            custom_query or "Solve or explain the current visible practice question. Give the useful answer first.",
+            image_task=image_task,
+        )
+        contents = [prompt]
+        for frame in frames:
+            contents.append(Image.open(io.BytesIO(frame)).convert("RGB"))
+        yield from self._gemini_stream(
+            contents,
+            max_tokens=int(os.environ.get("GEMINI_VISION_MAX_TOKENS", "1600")),
         )
 
-    def generate_answer(self, image_bytes=None, custom_query=None):
+    def generate_answer_stream(self, image_bytes=None, custom_query=None, use_image_history=False):
         if not _practice_mode_enabled():
-            return (
-                "### Live transcription active\n\n"
-                "Practice coaching is disabled. Set `PRACTICE_MODE=1` only for mock interviews, "
-                "practice, or sessions where AI assistance is explicitly permitted."
+            yield (
+                "### Practice mode is off\n\n"
+                "Set `PRACTICE_MODE=1` only for mock interviews, practice, or sessions where AI assistance is explicitly permitted."
             )
-
+            return
         try:
             if image_bytes is not None:
-                return self.generate_vision_answer(image_bytes, custom_query)
-            return self.generate_text_answer(custom_query)
+                yield from self.generate_vision_stream(
+                    image_bytes,
+                    custom_query=custom_query,
+                    use_image_history=use_image_history,
+                )
+            else:
+                yield from self.generate_text_stream(custom_query)
         except Exception as exc:
-            return f"### Gemini Error\n\n`{exc}`"
+            yield f"### Gemini Error\n\n`{exc}`"
+
+    def generate_answer(self, image_bytes=None, custom_query=None, use_image_history=False):
+        return "".join(
+            self.generate_answer_stream(
+                image_bytes=image_bytes,
+                custom_query=custom_query,
+                use_image_history=use_image_history,
+            )
+        ).strip()
