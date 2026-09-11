@@ -5,8 +5,73 @@ from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QPushButton, QWidget
 
 import config
+from engine.audio_recorder import AudioRecorder, DEFAULT_SPEAKER_LOOPBACK_INDEX
 from engine.camera_capture import CameraCaptureController
 from engine.visual_context import combine_visual_context
+
+
+def ensure_default_system_audio(window):
+    """Upgrade existing settings to the default-speaker loopback when system audio is disabled."""
+    current_system = int(window.settings.get("system_device_idx", -1))
+    if current_system != -1:
+        return
+    try:
+        _, detected_system = AudioRecorder.auto_detect_devices()
+    except Exception as exc:
+        print(f"[audio] Could not auto-select system audio: {exc}")
+        return
+    if int(detected_system) == -1:
+        return
+    window.settings["system_device_idx"] = int(detected_system)
+    window.audio_recorder.set_devices(
+        window.settings.get("mic_device_idx", -1),
+        int(detected_system),
+    )
+    config.save_settings(window.settings)
+    print(f"[audio] System audio auto-selected: {detected_system}")
+
+
+def install_settings_device_compat():
+    """Expose the synthetic -2 default-speaker loopback in the older Settings UI."""
+    from ui.settings_dialog import SettingsDialog
+
+    if getattr(SettingsDialog, "_default_loopback_compat_installed", False):
+        return
+
+    original_load_devices = SettingsDialog._load_devices
+
+    def load_devices(dialog):
+        original_load_devices(dialog)
+        combo = getattr(dialog, "system_combo", None)
+        if combo is None or combo.findData(DEFAULT_SPEAKER_LOOPBACK_INDEX) >= 0:
+            return
+        try:
+            _, loopbacks = AudioRecorder.list_devices()
+            item = next(
+                (
+                    source
+                    for source in loopbacks
+                    if int(source.get("index", -1))
+                    == DEFAULT_SPEAKER_LOOPBACK_INDEX
+                ),
+                None,
+            )
+            if item is None:
+                return
+            combo.insertItem(
+                1,
+                f"{item['name']} · {item.get('api', 'WASAPI loopback')}",
+                DEFAULT_SPEAKER_LOOPBACK_INDEX,
+            )
+            selected = int(dialog.settings.get("system_device_idx", -1))
+            selected_index = combo.findData(selected)
+            if selected_index >= 0:
+                combo.setCurrentIndex(selected_index)
+        except Exception as exc:
+            print(f"[settings] Could not expose default speaker loopback: {exc}")
+
+    SettingsDialog._load_devices = load_devices
+    SettingsDialog._default_loopback_compat_installed = True
 
 
 def install_local_provider_compat(window):
@@ -137,8 +202,6 @@ class CameraVisionControls(QObject):
         print(f"[camera] {message}")
 
     def _on_screen_frame(self, image_bytes):
-        # Run after OverlayWindow.handle_screen_frame has received the same signal.
-        # Defer one event-loop turn so our combined context becomes the final value.
         QTimer.singleShot(0, lambda payload=image_bytes: self._remember_screen(payload))
 
     def _remember_screen(self, image_bytes):

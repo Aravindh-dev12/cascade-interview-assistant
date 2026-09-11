@@ -15,7 +15,12 @@ from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
 from utils.mouse_passthrough import MousePassthroughController
-from utils.realtime_multimodal import CameraVisionControls, install_local_provider_compat
+from utils.realtime_multimodal import (
+    CameraVisionControls,
+    ensure_default_system_audio,
+    install_local_provider_compat,
+    install_settings_device_compat,
+)
 from utils.screen_capture_controls import ScreenCaptureControls
 
 
@@ -38,6 +43,7 @@ def main():
     tooltip_blocker = TooltipBlocker(app)
     app.installEventFilter(tooltip_blocker)
     app._tooltip_blocker = tooltip_blocker
+    install_settings_device_compat()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -48,6 +54,7 @@ def main():
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
 
     window = OverlayWindow()
+    ensure_default_system_audio(window)
     install_local_provider_compat(window)
     window.show()
 
@@ -63,8 +70,6 @@ def main():
     audio_device_monitor = AudioDeviceMonitor(window)
     window.audio_device_monitor = audio_device_monitor
 
-    # Create the hot-plug monitor after camera capture so a newly connected camera
-    # can immediately become the active live capture device.
     camera_device_monitor = CameraDeviceMonitor(window)
     window.camera_device_monitor = camera_device_monitor
 
@@ -72,8 +77,6 @@ def main():
     runtime_label_timer.setInterval(1200)
 
     def refresh_runtime_state():
-        # Settings can change while the app is running. Keep the local/cloud provider
-        # preference and camera capture state synchronized without touching speech work.
         window._configure_gemini()
         window.mode_label.setText(window.copilot_ai.runtime_label())
         camera_vision_controls.sync_from_settings()
