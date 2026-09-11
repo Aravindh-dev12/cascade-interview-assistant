@@ -16,8 +16,14 @@ INTERVIEW_TASK_TERMS = (
 
 SCREEN_REFERENCE_TERMS = (
     "this code", "this error", "this output", "this question", "on the screen", "shown here",
-    "shown on", "above code", "below code", "diagram", "screenshot", "visible", "what do you see",
-    "fix this", "solve this", "what is wrong here", "what's wrong here",
+    "shown on", "above code", "below code", "diagram", "screenshot", "visible", "fix this",
+    "solve this", "what is wrong here", "what's wrong here",
+)
+
+CAMERA_REFERENCE_TERMS = (
+    "camera", "webcam", "look at this", "look at me", "what am i holding",
+    "what i'm holding", "what i am holding", "what do you see", "showing you",
+    "in front of the camera", "this object", "this item", "this device",
 )
 
 ACK_ONLY = re.compile(
@@ -31,11 +37,7 @@ def normalize_text(text: str) -> str:
 
 
 def is_substantive_question(text: str) -> bool:
-    """Cheap local detector used before spending an LLM request.
-
-    It intentionally accepts imperative interview prompts such as "Explain dependency injection"
-    even when ASR punctuation does not include a question mark.
-    """
+    """Cheap local detector used before spending an LLM request."""
     clean = normalize_text(text)
     if len(clean) < 9 or ACK_ONLY.match(clean):
         return False
@@ -50,6 +52,19 @@ def is_substantive_question(text: str) -> bool:
     return False
 
 
-def should_attach_screen(text: str) -> bool:
+def should_attach_camera(text: str) -> bool:
     lower = normalize_text(text).lower()
-    return any(term in lower for term in SCREEN_REFERENCE_TERMS)
+    return any(term in lower for term in CAMERA_REFERENCE_TERMS)
+
+
+def should_attach_screen(text: str) -> bool:
+    """Return true when the existing overlay should attach visual context.
+
+    The overlay historically knows only a single ``latest_screen_bytes`` slot. The
+    real-time multimodal bridge publishes a labeled SCREEN+CAMERA composite there,
+    so camera-referential prompts use the same proven vision-request path.
+    """
+    lower = normalize_text(text).lower()
+    return any(term in lower for term in SCREEN_REFERENCE_TERMS) or any(
+        term in lower for term in CAMERA_REFERENCE_TERMS
+    )

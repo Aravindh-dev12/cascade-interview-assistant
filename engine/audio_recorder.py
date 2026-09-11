@@ -9,6 +9,14 @@ from collections import deque
 import numpy as np
 import sounddevice as sd
 
+try:
+    import soundcard as sc
+except Exception:
+    sc = None
+
+
+DEFAULT_SPEAKER_LOOPBACK_INDEX = -2
+
 
 class AudioRecorder:
     def __init__(self, sample_rate=16000, chunk_duration=0.1):
@@ -26,6 +34,12 @@ class AudioRecorder:
         self.sys_channels = 1
         self.sys_samplerate = self.sample_rate
         self.lock = threading.RLock()
+
+        self.system_loopback_thread = None
+        self._system_loopback_stop = threading.Event()
+        self._system_loopback_ready = threading.Event()
+        self._system_loopback_active = False
+        self._system_loopback_error = None
 
         debug_seconds = max(0.0, float(os.environ.get("AUDIO_DEBUG_BUFFER_SECONDS", "0")))
         debug_chunks = max(1, int(debug_seconds / self.chunk_duration)) if debug_seconds else 1
@@ -50,15 +64,43 @@ class AudioRecorder:
             pass
 
     @staticmethod
+    def _default_speaker_loopback_info():
+        if sys.platform != "win32" or sc is None:
+            return None
+        try:
+            speaker = sc.default_speaker()
+            if speaker is None:
+                return None
+            name = getattr(speaker, "name", None) or str(speaker)
+            return {
+                "index": DEFAULT_SPEAKER_LOOPBACK_INDEX,
+                "name": f"Default speaker loopback · {name}",
+                "api": "WASAPI speaker loopback",
+            }
+        except Exception as exc:
+            print(f"[audio] Could not query default speaker loopback: {exc}")
+            return None
+
+    @staticmethod
     def list_devices():
-        """Return microphones and actual input-capable loopback/system devices."""
+        """Return microphones plus usable system-audio capture choices.
+
+        On Windows, a SoundCard/WASAPI default-speaker loopback is exposed as
+        index ``-2``. It captures audio played by browsers, media players, and
+        meeting apps without requiring Stereo Mix or a virtual cable.
+        """
         mics = []
         loopbacks = []
+
+        speaker_loopback = AudioRecorder._default_speaker_loopback_info()
+        if speaker_loopback:
+            loopbacks.append(speaker_loopback)
+
         try:
             devices = sd.query_devices()
             host_apis = sd.query_hostapis()
         except Exception as exc:
-            print(f"[audio] Error querying devices: {exc}")
+            print(f"[audio] Error querying PortAudio devices: {exc}")
             return mics, loopbacks
 
         wasapi_idx = None
@@ -71,20 +113,33 @@ class AudioRecorder:
         for idx, device in enumerate(devices):
             name = device.get("name", f"Device {idx}")
             api_name = host_apis[device["hostapi"]].get("name", "Audio")
-            if device.get("max_input_channels", 0) > 0:
-                if "loopback" not in name.lower() and "stereo mix" not in name.lower():
-                    mics.append({"index": idx, "name": name, "api": api_name})
+            if device.get("max_input_channels", 0) <= 0:
+                continue
 
-                is_loopback = (
-                    "loopback" in name.lower()
-                    or "stereo mix" in name.lower()
-                    or "what u hear" in name.lower()
-                )
-                if is_loopback and (wasapi_idx is None or device["hostapi"] == wasapi_idx or "stereo mix" in name.lower()):
-                    loopbacks.append({"index": idx, "name": name, "api": api_name})
+            lower = name.lower()
+            is_loopback = (
+                "loopback" in lower
+                or "stereo mix" in lower
+                or "what u hear" in lower
+                or "what you hear" in lower
+            )
+
+            if not is_loopback:
+                mics.append({"index": idx, "name": name, "api": api_name})
+
+            if is_loopback and (
+                wasapi_idx is None
+                or device["hostapi"] == wasapi_idx
+                or "stereo mix" in lower
+                or "what u hear" in lower
+                or "what you hear" in lower
+            ):
+                loopbacks.append({"index": idx, "name": name, "api": api_name})
 
         if sys.platform != "win32" and not loopbacks:
-            loopbacks.append({"index": -1, "name": "System loopback unavailable", "api": "Windows only"})
+            loopbacks.append(
+                {"index": -1, "name": "System loopback unavailable", "api": "Windows only"}
+            )
         return mics, loopbacks
 
     @staticmethod
@@ -94,14 +149,35 @@ class AudioRecorder:
             mic_idx = sd.default.device[0]
             if mic_idx is None or mic_idx < 0:
                 mic_idx = next(
-                    (idx for idx, dev in enumerate(devices) if dev.get("max_input_channels", 0) > 0),
+                    (
+                        idx
+                        for idx, dev in enumerate(devices)
+                        if dev.get("max_input_channels", 0) > 0
+                    ),
                     -1,
                 )
 
             _, loopbacks = AudioRecorder.list_devices()
-            system_idx = next((item["index"] for item in loopbacks if item.get("index", -1) >= 0), -1)
-            if system_idx < 0:
-                print("[audio] No input-capable system loopback found; mic-only mode available.")
+            system_idx = next(
+                (
+                    item["index"]
+                    for item in loopbacks
+                    if int(item.get("index", -1)) == DEFAULT_SPEAKER_LOOPBACK_INDEX
+                ),
+                None,
+            )
+            if system_idx is None:
+                system_idx = next(
+                    (
+                        item["index"]
+                        for item in loopbacks
+                        if int(item.get("index", -1)) >= 0
+                    ),
+                    -1,
+                )
+
+            if system_idx < 0 and system_idx != DEFAULT_SPEAKER_LOOPBACK_INDEX:
+                print("[audio] No system-audio loopback found; mic-only mode available.")
             else:
                 print(f"[audio] Auto-detected mic={mic_idx}, system={system_idx}")
             return int(mic_idx if mic_idx is not None else -1), int(system_idx)
@@ -113,7 +189,10 @@ class AudioRecorder:
         with self.lock:
             self.mic_device_idx = int(mic_idx) if mic_idx is not None else -1
             self.system_device_idx = int(system_idx) if system_idx is not None else -1
-            print(f"[audio] Devices configured - mic={self.mic_device_idx}, system={self.system_device_idx}")
+            print(
+                f"[audio] Devices configured - mic={self.mic_device_idx}, "
+                f"system={self.system_device_idx}"
+            )
 
     def _mic_callback(self, indata, frames, time_info, status):
         if status:
@@ -121,6 +200,8 @@ class AudioRecorder:
         self._put_latest(self.mic_queue, indata.copy())
 
     def _system_callback(self, indata, frames, time_info, status):
+        if status:
+            print(f"[audio] System stream status: {status}", file=sys.stderr)
         self._put_latest(self.system_queue, indata.copy())
 
     def _reset_queues(self):
@@ -129,12 +210,112 @@ class AudioRecorder:
         self.audio_buffer_mic.clear()
         self.audio_buffer_system.clear()
 
+    def _resolve_default_speaker_loopback(self):
+        if sc is None:
+            raise RuntimeError(
+                "soundcard package is not installed; run `pip install -r requirements.txt`"
+            )
+        speaker = sc.default_speaker()
+        if speaker is None:
+            raise RuntimeError("Windows has no default speaker output")
+
+        identifiers = [
+            getattr(speaker, "id", None),
+            getattr(speaker, "name", None),
+            str(getattr(speaker, "name", "") or ""),
+        ]
+        last_error = None
+        for identifier in identifiers:
+            if identifier in (None, ""):
+                continue
+            try:
+                return sc.get_microphone(identifier, include_loopback=True)
+            except Exception as exc:
+                last_error = exc
+
+        speaker_name = str(getattr(speaker, "name", "") or "").lower()
+        try:
+            loopbacks = sc.all_microphones(include_loopback=True)
+            matching = next(
+                (
+                    mic
+                    for mic in loopbacks
+                    if speaker_name
+                    and speaker_name in str(getattr(mic, "name", "") or "").lower()
+                ),
+                None,
+            )
+            if matching is not None:
+                return matching
+        except Exception as exc:
+            last_error = exc
+
+        raise RuntimeError(
+            f"Could not open default-speaker loopback: {last_error or 'not found'}"
+        )
+
+    def _system_loopback_worker(self):
+        self._system_loopback_error = None
+        try:
+            loopback = self._resolve_default_speaker_loopback()
+            self.sys_samplerate = int(
+                float(os.environ.get("WASAPI_LOOPBACK_SAMPLE_RATE", "48000"))
+            )
+            numframes = max(256, int(self.sys_samplerate * 0.025))
+            blocksize = max(numframes * 4, 4096)
+
+            with loopback.recorder(
+                samplerate=self.sys_samplerate,
+                blocksize=blocksize,
+            ) as recorder:
+                self._system_loopback_active = True
+                self._system_loopback_ready.set()
+                print(
+                    "[audio] Default-speaker WASAPI loopback started "
+                    f"@ {self.sys_samplerate} Hz."
+                )
+
+                while not self._system_loopback_stop.is_set():
+                    data = recorder.record(numframes=numframes)
+                    if data is None or len(data) == 0:
+                        continue
+                    array = np.asarray(data, dtype=np.float32)
+                    self._put_latest(self.system_queue, array.copy())
+        except Exception as exc:
+            self._system_loopback_error = exc
+            print(f"[audio] Default-speaker loopback failed: {exc}")
+            self._system_loopback_ready.set()
+        finally:
+            self._system_loopback_active = False
+
+    def _start_default_speaker_loopback(self):
+        if sys.platform != "win32":
+            print("[audio] Speaker loopback is enabled only on Windows.")
+            return False
+
+        self._system_loopback_stop.clear()
+        self._system_loopback_ready.clear()
+        self.system_loopback_thread = threading.Thread(
+            target=self._system_loopback_worker,
+            daemon=True,
+            name="wasapi-speaker-loopback",
+        )
+        self.system_loopback_thread.start()
+        self._system_loopback_ready.wait(timeout=0.9)
+        if not self._system_loopback_active:
+            self.system_loopback_thread = None
+            return False
+        return True
+
     def start_recording(self):
         with self.lock:
             if self.is_recording:
                 return
-            self.is_recording = True
+
             self._reset_queues()
+            self._system_loopback_stop.clear()
+            self._system_loopback_active = False
+            opened_any = False
 
             if self.mic_device_idx is not None and self.mic_device_idx >= 0:
                 try:
@@ -148,20 +329,29 @@ class AudioRecorder:
                         latency="low",
                     )
                     self.mic_stream.start()
+                    opened_any = True
                     print("[audio] Mic stream started.")
                 except Exception as exc:
                     print(f"[audio] Failed to start mic stream: {exc}")
                     self.mic_stream = None
 
-            if self.system_device_idx is not None and self.system_device_idx >= 0:
+            if self.system_device_idx == DEFAULT_SPEAKER_LOOPBACK_INDEX:
+                opened_any = self._start_default_speaker_loopback() or opened_any
+            elif self.system_device_idx is not None and self.system_device_idx >= 0:
                 try:
                     dev_info = sd.query_devices(self.system_device_idx)
                     max_inputs = int(dev_info.get("max_input_channels", 0))
                     if max_inputs <= 0:
-                        raise RuntimeError("Selected system-audio device is not input-capable")
+                        raise RuntimeError(
+                            "Selected system-audio device is not input-capable"
+                        )
                     self.sys_channels = min(2, max_inputs)
-                    self.sys_samplerate = int(dev_info.get("default_samplerate", self.sample_rate))
-                    sys_blocksize = max(1, int(self.sys_samplerate * self.chunk_duration))
+                    self.sys_samplerate = int(
+                        dev_info.get("default_samplerate", self.sample_rate)
+                    )
+                    sys_blocksize = max(
+                        1, int(self.sys_samplerate * self.chunk_duration)
+                    )
                     self.system_stream = sd.InputStream(
                         device=self.system_device_idx,
                         channels=self.sys_channels,
@@ -172,19 +362,22 @@ class AudioRecorder:
                         latency="low",
                     )
                     self.system_stream.start()
+                    opened_any = True
                     print(
-                        f"[audio] System input started ({self.sys_channels}ch @ {self.sys_samplerate} Hz)."
+                        "[audio] System input started "
+                        f"({self.sys_channels}ch @ {self.sys_samplerate} Hz)."
                     )
                 except Exception as exc:
                     print(f"[audio] Failed to start system loopback: {exc}")
                     self.system_stream = None
 
-            if self.mic_stream is None and self.system_stream is None:
-                self.is_recording = False
+            self.is_recording = opened_any
 
     def stop_recording(self):
         with self.lock:
             self.is_recording = False
+            self._system_loopback_stop.set()
+
             for attr in ("mic_stream", "system_stream"):
                 stream = getattr(self, attr)
                 if stream is not None:
@@ -194,6 +387,16 @@ class AudioRecorder:
                     except Exception as exc:
                         print(f"[audio] Error closing {attr}: {exc}")
                     setattr(self, attr, None)
+
+            thread = self.system_loopback_thread
+            self.system_loopback_thread = None
+            if (
+                thread is not None
+                and thread.is_alive()
+                and threading.current_thread() is not thread
+            ):
+                thread.join(timeout=0.8)
+            self._system_loopback_active = False
             print("[audio] Audio recording stopped.")
 
     @staticmethod
@@ -212,16 +415,24 @@ class AudioRecorder:
 
         mic_audio = None
         if mic_chunks:
-            mic_audio = np.concatenate(mic_chunks, axis=0).astype(np.float32).flatten()
+            mic_audio = (
+                np.concatenate(mic_chunks, axis=0).astype(np.float32).flatten()
+            )
             if self.keep_debug_audio:
                 self.audio_buffer_mic.append(mic_audio.copy())
 
         system_audio = None
         if system_chunks:
             raw = np.concatenate(system_chunks, axis=0)
-            raw = np.mean(raw, axis=1) if raw.ndim > 1 and raw.shape[1] > 1 else raw.flatten()
+            raw = (
+                np.mean(raw, axis=1)
+                if raw.ndim > 1 and raw.shape[1] > 1
+                else raw.flatten()
+            )
             if self.sys_samplerate != self.sample_rate and len(raw) > 1:
-                num_samples = max(1, int(len(raw) * self.sample_rate / self.sys_samplerate))
+                num_samples = max(
+                    1, int(len(raw) * self.sample_rate / self.sys_samplerate)
+                )
                 system_audio = np.interp(
                     np.linspace(0, len(raw) - 1, num_samples),
                     np.arange(len(raw)),
@@ -229,6 +440,7 @@ class AudioRecorder:
                 ).astype(np.float32)
             else:
                 system_audio = raw.astype(np.float32)
+
             if self.keep_debug_audio:
                 self.audio_buffer_system.append(system_audio.copy())
 
@@ -238,7 +450,9 @@ class AudioRecorder:
     def save_to_wav_bytes(audio_data, sample_rate=16000) -> bytes:
         if audio_data is None or len(audio_data) == 0:
             return b""
-        audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
+        audio_int16 = (
+            np.clip(audio_data, -1.0, 1.0) * 32767
+        ).astype(np.int16)
         wav_io = io.BytesIO()
         with wave.open(wav_io, "wb") as wav_file:
             wav_file.setnchannels(1)

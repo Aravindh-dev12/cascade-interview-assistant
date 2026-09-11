@@ -19,12 +19,16 @@ DEFAULT_SETTINGS = {
     "camera_device_id": "",
     "auto_detect_camera_devices": True,
     "auto_switch_new_camera": True,
+    "camera_capture_enabled": True,
+    "camera_frame_interval_ms": 450,
+    "camera_context_max_age_seconds": 3.0,
+    "include_camera_with_speech": True,
     "hotkey_capture": "<ctrl>+<shift>+s",
     "hotkey_record": "<ctrl>+<shift>+a",
     "capture_region": None,
     "auto_start_listening": True,
     "auto_answer_speech": True,
-    "answer_cooldown_seconds": 0.6,
+    "answer_cooldown_seconds": 0.25,
     "auto_screen_watch": True,
     "auto_answer_screen": True,
     "screen_watch_interval_ms": 650,
@@ -69,8 +73,16 @@ def load_settings():
     settings["ai_provider"] = _normalize_provider(settings.get("ai_provider"))
     settings["model"] = _normalize_model(settings.get("model"))
     settings["local_model"] = _normalize_local_model(settings.get("local_model"))
-    settings["ollama_base_url"] = str(settings.get("ollama_base_url") or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+    settings["ollama_base_url"] = str(
+        settings.get("ollama_base_url") or DEFAULT_OLLAMA_BASE_URL
+    ).rstrip("/")
     settings["ollama_num_ctx"] = max(2048, int(settings.get("ollama_num_ctx", 8192)))
+    settings["camera_frame_interval_ms"] = max(
+        200, int(settings.get("camera_frame_interval_ms", 450))
+    )
+    settings["camera_context_max_age_seconds"] = max(
+        0.5, float(settings.get("camera_context_max_age_seconds", 3.0))
+    )
     return settings
 
 
@@ -84,11 +96,21 @@ def save_settings(settings):
 
         clean_settings["ai_provider"] = _normalize_provider(clean_settings.get("ai_provider"))
         clean_settings["model"] = _normalize_model(clean_settings.get("model"))
-        clean_settings["local_model"] = _normalize_local_model(clean_settings.get("local_model"))
+        clean_settings["local_model"] = _normalize_local_model(
+            clean_settings.get("local_model")
+        )
         clean_settings["ollama_base_url"] = str(
             clean_settings.get("ollama_base_url") or DEFAULT_OLLAMA_BASE_URL
         ).rstrip("/")
-        clean_settings["ollama_num_ctx"] = max(2048, int(clean_settings.get("ollama_num_ctx", 8192)))
+        clean_settings["ollama_num_ctx"] = max(
+            2048, int(clean_settings.get("ollama_num_ctx", 8192))
+        )
+        clean_settings["camera_frame_interval_ms"] = max(
+            200, int(clean_settings.get("camera_frame_interval_ms", 450))
+        )
+        clean_settings["camera_context_max_age_seconds"] = max(
+            0.5, float(clean_settings.get("camera_context_max_age_seconds", 3.0))
+        )
 
         with open(CONFIG_FILE, "w", encoding="utf-8") as file:
             json.dump(clean_settings, file, indent=4)

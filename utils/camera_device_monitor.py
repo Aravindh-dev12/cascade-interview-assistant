@@ -30,12 +30,7 @@ def list_cameras():
 
 
 class CameraDeviceMonitor(QObject):
-    """Track camera hot-plug events without opening the camera stream.
-
-    Qt's media-device layer receives USB/Bluetooth/virtual camera topology changes.
-    The selected camera is kept in settings so later camera capture features can use
-    the currently connected device without asking the user to re-select it.
-    """
+    """Track camera hot-plug events and keep live capture on the selected device."""
 
     def __init__(self, window):
         super().__init__(window)
@@ -52,6 +47,11 @@ class CameraDeviceMonitor(QObject):
         except Exception:
             pass
 
+    def _apply_capture_device(self, selected):
+        capture = getattr(self.window, "camera_capture", None)
+        if capture is not None:
+            capture.set_device(selected)
+
     def _refresh(self, initial=False):
         if not self.window.settings.get("auto_detect_camera_devices", True):
             return
@@ -65,13 +65,26 @@ class CameraDeviceMonitor(QObject):
         selected = current
         selected_name = ""
 
-        if self.window.settings.get("auto_switch_new_camera", True) and added_ids:
-            newest = next((item for item in reversed(cameras) if item["id"] in added_ids), None)
+        if (
+            self.window.settings.get("auto_switch_new_camera", True)
+            and added_ids
+        ):
+            newest = next(
+                (
+                    item
+                    for item in reversed(cameras)
+                    if item["id"] in added_ids
+                ),
+                None,
+            )
             if newest:
                 selected = newest["id"]
                 selected_name = newest["name"]
         elif current not in ids:
-            default_camera = next((item for item in cameras if item.get("default")), None)
+            default_camera = next(
+                (item for item in cameras if item.get("default")),
+                None,
+            )
             fallback = default_camera or (cameras[0] if cameras else None)
             if fallback:
                 selected = fallback["id"]
@@ -82,10 +95,22 @@ class CameraDeviceMonitor(QObject):
         if selected != current:
             self.window.settings["camera_device_id"] = selected
             config.save_settings(self.window.settings)
+            self._apply_capture_device(selected)
             if selected:
-                print(f"[camera-monitor] Active camera switched automatically: {selected_name or selected}")
+                print(
+                    "[camera-monitor] Active camera switched automatically: "
+                    f"{selected_name or selected}"
+                )
             else:
                 print("[camera-monitor] No camera currently connected.")
-        elif initial and selected:
-            camera = next((item for item in cameras if item["id"] == selected), None)
-            print(f"[camera-monitor] Active camera: {(camera or {}).get('name', selected)}")
+        else:
+            self._apply_capture_device(selected)
+            if initial and selected:
+                camera = next(
+                    (item for item in cameras if item["id"] == selected),
+                    None,
+                )
+                print(
+                    f"[camera-monitor] Active camera: "
+                    f"{(camera or {}).get('name', selected)}"
+                )

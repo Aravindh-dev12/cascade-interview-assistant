@@ -15,6 +15,7 @@ from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
 from utils.mouse_passthrough import MousePassthroughController
+from utils.realtime_multimodal import CameraVisionControls, install_local_provider_compat
 from utils.screen_capture_controls import ScreenCaptureControls
 
 
@@ -22,7 +23,7 @@ class TooltipBlocker(QObject):
     """Suppress all Qt hover tooltips so scrollable forms stay visually clean."""
 
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.ToolTip:
+        if event.type() == QEvent.Type.ToolTip:
             return True
         return super().eventFilter(watched, event)
 
@@ -47,10 +48,14 @@ def main():
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
 
     window = OverlayWindow()
+    install_local_provider_compat(window)
     window.show()
 
     screen_capture_controls = ScreenCaptureControls(window)
     window.screen_capture_controls = screen_capture_controls
+
+    camera_vision_controls = CameraVisionControls(window)
+    window.camera_vision_controls = camera_vision_controls
 
     mouse_passthrough = MousePassthroughController(window)
     window.mouse_passthrough_controller = mouse_passthrough
@@ -58,19 +63,25 @@ def main():
     audio_device_monitor = AudioDeviceMonitor(window)
     window.audio_device_monitor = audio_device_monitor
 
+    # Create the hot-plug monitor after camera capture so a newly connected camera
+    # can immediately become the active live capture device.
     camera_device_monitor = CameraDeviceMonitor(window)
     window.camera_device_monitor = camera_device_monitor
 
-    # Keep the visible model badge truthful even when AUTO switches between local
-    # Ollama and Gemini fallback. This avoids touching the request/streaming path.
     runtime_label_timer = QTimer(window)
-    runtime_label_timer.setInterval(1500)
-    runtime_label_timer.timeout.connect(
-        lambda: window.mode_label.setText(window.copilot_ai.runtime_label())
-    )
+    runtime_label_timer.setInterval(1200)
+
+    def refresh_runtime_state():
+        # Settings can change while the app is running. Keep the local/cloud provider
+        # preference and camera capture state synchronized without touching speech work.
+        window._configure_gemini()
+        window.mode_label.setText(window.copilot_ai.runtime_label())
+        camera_vision_controls.sync_from_settings()
+
+    runtime_label_timer.timeout.connect(refresh_runtime_state)
     runtime_label_timer.start()
     window.runtime_label_timer = runtime_label_timer
-    window.mode_label.setText(window.copilot_ai.runtime_label())
+    refresh_runtime_state()
 
     window.raise_()
     window.activateWindow()
@@ -80,13 +91,16 @@ def main():
         and env_status["practice_mode"]
         and env_status["nvidia_loaded"]
     ):
-        QTimer.singleShot(350, window.toggle_recording)
+        QTimer.singleShot(250, window.toggle_recording)
 
     print("[main] quntumnintent running.")
-    print("Press Ctrl+Shift+S globally to Capture Region & Answer.")
-    print("Press Ctrl+Shift+A globally to Toggle Voice Listening.")
+    print("Ctrl+Shift+S: capture screen and answer.")
+    print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
+    print("Camera button: analyze the latest live camera frame.")
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    camera_vision_controls.stop()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
