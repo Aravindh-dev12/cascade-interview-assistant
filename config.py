@@ -7,7 +7,7 @@ DEFAULT_LOCAL_MODEL = "qwen3.5:4b"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 DEFAULT_SETTINGS = {
-    "ai_provider": "auto",  # auto = local Ollama first, then Gemini fallback
+    "ai_provider": "hybrid",  # Kimi K3 first, local Ollama fallback
     "model": DEFAULT_GEMINI_MODEL,
     "local_model": DEFAULT_LOCAL_MODEL,
     "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
@@ -45,7 +45,7 @@ DEFAULT_SETTINGS = {
 
 def _normalize_provider(provider):
     provider = str(provider or "").strip().lower()
-    return provider if provider in {"auto", "ollama", "gemini"} else "auto"
+    return provider if provider in {"auto", "hybrid", "nvidia", "ollama", "gemini"} else "hybrid"
 
 
 def _normalize_model(model):
