@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -28,9 +29,35 @@ class TooltipBlocker(QObject):
     """Suppress all Qt hover tooltips so scrollable forms stay visually clean."""
 
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.ToolTip:
+        try:
+            if event.type() == QEvent.Type.ToolTip:
+                return True
+        except KeyboardInterrupt:
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
             return True
         return super().eventFilter(watched, event)
+
+
+def _install_console_signal_handlers(app):
+    """Let Ctrl+C / console termination shut down the Qt event loop cleanly."""
+
+    def request_quit(signum, _frame):
+        print(f"\n[main] Console signal {signum} received; shutting down...")
+        app.quit()
+
+    signal.signal(signal.SIGINT, request_quit)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, request_quit)
+
+    # Python only dispatches signals while the interpreter gets control. A short
+    # Qt timer keeps that happening even when QApplication.exec() owns the loop.
+    signal_timer = QTimer(app)
+    signal_timer.setInterval(100)
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start()
+    app._signal_timer = signal_timer
 
 
 def main():
@@ -39,6 +66,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("quntumnintent")
     app.setOrganizationName("CopilotAI")
+    _install_console_signal_handlers(app)
 
     tooltip_blocker = TooltipBlocker(app)
     app.installEventFilter(tooltip_blocker)
@@ -52,6 +80,8 @@ def main():
     print(f"[env] NVIDIA_API_KEY loaded: {env_status['nvidia_loaded']}")
     print(f"[env] GEMINI_API_KEY loaded: {env_status['gemini_loaded']}")
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
+    if not env_status["exists"]:
+        print("[env] WARNING: no project .env found. Copy .env.template to .env, then set PRACTICE_MODE=1 and your NVIDIA key.")
 
     window = OverlayWindow()
     ensure_default_system_audio(window)
@@ -100,9 +130,14 @@ def main():
     print("Ctrl+Shift+S: capture screen and answer.")
     print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
     print("Camera button: analyze the latest live camera frame.")
+    print("Ctrl+C in this console: quit cleanly.")
 
-    exit_code = app.exec()
-    camera_vision_controls.stop()
+    try:
+        exit_code = app.exec()
+    finally:
+        camera_vision_controls.stop()
+        if window.isVisible():
+            window.close()
     sys.exit(exit_code)
 
 
