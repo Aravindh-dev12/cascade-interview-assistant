@@ -1,8 +1,8 @@
-import sys
 import os
+import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -13,8 +13,18 @@ env_status = load_project_env(PROJECT_DIR)
 
 from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
+from utils.camera_device_monitor import CameraDeviceMonitor
 from utils.mouse_passthrough import MousePassthroughController
 from utils.screen_capture_controls import ScreenCaptureControls
+
+
+class TooltipBlocker(QObject):
+    """Suppress all Qt hover tooltips so scrollable forms stay visually clean."""
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.ToolTip:
+            return True
+        return super().eventFilter(watched, event)
 
 
 def main():
@@ -23,6 +33,10 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("quntumnintent")
     app.setOrganizationName("CopilotAI")
+
+    tooltip_blocker = TooltipBlocker(app)
+    app.installEventFilter(tooltip_blocker)
+    app._tooltip_blocker = tooltip_blocker
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -44,12 +58,23 @@ def main():
     audio_device_monitor = AudioDeviceMonitor(window)
     window.audio_device_monitor = audio_device_monitor
 
+    camera_device_monitor = CameraDeviceMonitor(window)
+    window.camera_device_monitor = camera_device_monitor
+
+    # Keep the visible model badge truthful even when AUTO switches between local
+    # Ollama and Gemini fallback. This avoids touching the request/streaming path.
+    runtime_label_timer = QTimer(window)
+    runtime_label_timer.setInterval(1500)
+    runtime_label_timer.timeout.connect(
+        lambda: window.mode_label.setText(window.copilot_ai.runtime_label())
+    )
+    runtime_label_timer.start()
+    window.runtime_label_timer = runtime_label_timer
+    window.mode_label.setText(window.copilot_ai.runtime_label())
+
     window.raise_()
     window.activateWindow()
 
-    # Start hands-free listening automatically only in explicitly enabled practice
-    # mode. API keys are loaded directly from the project-local .env; the user does
-    # not need to paste credentials into Settings.
     if (
         window.settings.get("auto_start_listening", True)
         and env_status["practice_mode"]
