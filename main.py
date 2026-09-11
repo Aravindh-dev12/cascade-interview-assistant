@@ -1,8 +1,8 @@
-import sys
 import os
+import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -13,8 +13,24 @@ env_status = load_project_env(PROJECT_DIR)
 
 from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
+from utils.camera_device_monitor import CameraDeviceMonitor
 from utils.mouse_passthrough import MousePassthroughController
+from utils.realtime_multimodal import (
+    CameraVisionControls,
+    ensure_default_system_audio,
+    install_local_provider_compat,
+    install_settings_device_compat,
+)
 from utils.screen_capture_controls import ScreenCaptureControls
+
+
+class TooltipBlocker(QObject):
+    """Suppress all Qt hover tooltips so scrollable forms stay visually clean."""
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.ToolTip:
+            return True
+        return super().eventFilter(watched, event)
 
 
 def main():
@@ -23,6 +39,11 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("quntumnintent")
     app.setOrganizationName("CopilotAI")
+
+    tooltip_blocker = TooltipBlocker(app)
+    app.installEventFilter(tooltip_blocker)
+    app._tooltip_blocker = tooltip_blocker
+    install_settings_device_compat()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -33,10 +54,15 @@ def main():
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
 
     window = OverlayWindow()
+    ensure_default_system_audio(window)
+    install_local_provider_compat(window)
     window.show()
 
     screen_capture_controls = ScreenCaptureControls(window)
     window.screen_capture_controls = screen_capture_controls
+
+    camera_vision_controls = CameraVisionControls(window)
+    window.camera_vision_controls = camera_vision_controls
 
     mouse_passthrough = MousePassthroughController(window)
     window.mouse_passthrough_controller = mouse_passthrough
@@ -44,24 +70,40 @@ def main():
     audio_device_monitor = AudioDeviceMonitor(window)
     window.audio_device_monitor = audio_device_monitor
 
+    camera_device_monitor = CameraDeviceMonitor(window)
+    window.camera_device_monitor = camera_device_monitor
+
+    runtime_label_timer = QTimer(window)
+    runtime_label_timer.setInterval(1200)
+
+    def refresh_runtime_state():
+        window._configure_gemini()
+        window.mode_label.setText(window.copilot_ai.runtime_label())
+        camera_vision_controls.sync_from_settings()
+
+    runtime_label_timer.timeout.connect(refresh_runtime_state)
+    runtime_label_timer.start()
+    window.runtime_label_timer = runtime_label_timer
+    refresh_runtime_state()
+
     window.raise_()
     window.activateWindow()
 
-    # Start hands-free listening automatically only in explicitly enabled practice
-    # mode. API keys are loaded directly from the project-local .env; the user does
-    # not need to paste credentials into Settings.
     if (
         window.settings.get("auto_start_listening", True)
         and env_status["practice_mode"]
         and env_status["nvidia_loaded"]
     ):
-        QTimer.singleShot(350, window.toggle_recording)
+        QTimer.singleShot(250, window.toggle_recording)
 
     print("[main] quntumnintent running.")
-    print("Press Ctrl+Shift+S globally to Capture Region & Answer.")
-    print("Press Ctrl+Shift+A globally to Toggle Voice Listening.")
+    print("Ctrl+Shift+S: capture screen and answer.")
+    print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
+    print("Camera button: analyze the latest live camera frame.")
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    camera_vision_controls.stop()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

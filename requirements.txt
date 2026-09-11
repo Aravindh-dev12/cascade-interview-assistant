@@ -4,6 +4,7 @@ mss>=9.0.1
 pillow>=10.0.0
 pynput>=1.7.6
 sounddevice>=0.4.6
+soundcard>=0.4.6
 numpy>=1.20.0
 python-dotenv>=1.0.0
 nvidia-riva-client>=2.20.0

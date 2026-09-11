@@ -5,7 +5,7 @@ from engine.screen_grabber import capture_screen, get_image_bytes
 
 
 class ScreenCaptureControls:
-    """Reliable capture button/hotkey path for the production overlay."""
+    """Manual screen-capture button/hotkey path."""
 
     def __init__(self, window):
         self.window = window
@@ -16,55 +16,37 @@ class ScreenCaptureControls:
 
     def _connect_hotkey(self):
         try:
-            self.window.hotkey_signaler.capture_hotkey_triggered.connect(
-                self.capture_and_answer
-            )
-            print("[capture] Ctrl+Shift+S reliable screen capture connected.")
+            self.window.hotkey_signaler.capture_hotkey_triggered.connect(self.capture_and_answer)
         except Exception as exc:
             print(f"[capture] Could not connect capture hotkey: {exc}")
 
     def _add_capture_button(self):
         control_bar = self.window.findChild(QWidget, "controlBar")
         if control_bar is None or control_bar.layout() is None:
-            print("[capture] Control bar not found; hotkey remains available.")
             return
-
-        layout = control_bar.layout()
         button = QPushButton("Capture screen")
         button.setObjectName("captureBtn")
         button.clicked.connect(self.capture_and_answer)
-
-        insert_at = min(1, layout.count())
-        layout.insertWidget(insert_at, button)
+        control_bar.layout().insertWidget(min(1, control_bar.layout().count()), button)
         self.capture_button = button
-        print("[capture] Capture Screen button attached.")
 
     def capture_and_answer(self):
-        """Hide the overlay, capture its current monitor, then restore it."""
         if self.capture_in_progress:
             return
         self.capture_in_progress = True
-
-        if hasattr(self.window, "_configure_gemini"):
-            self.window._configure_gemini()
-        self.window._set_status("THINKING")
-
         center = self.window.frameGeometry().center()
-        capture_point = (center.x(), center.y())
+        point = (center.x(), center.y())
+        region = self.window.settings.get("capture_region")
 
+        # Hide only for explicit manual captures so the frame is clean even when
+        # Windows display-affinity protection is disabled or unsupported.
         self.window.hide()
         QApplication.processEvents()
-        QTimer.singleShot(120, lambda: self._perform_capture(capture_point))
+        QTimer.singleShot(100, lambda: self._perform_capture(region, point))
 
-    def _perform_capture(self, capture_point):
+    def _perform_capture(self, region, point):
         try:
-            # The main Capture Screen action deliberately ignores any previously
-            # saved crop. It captures the complete monitor containing the overlay,
-            # so a stale region cannot make the app miss the visible problem.
-            image = capture_screen(region=None, point=capture_point)
-
-            # Preserve enough pixels for small code/MCQ text while keeping the
-            # Gemini request reasonably small and fast.
+            image = capture_screen(region=region, point=None if region else point)
             if image.width > 1600:
                 from PIL import Image
 
@@ -73,16 +55,10 @@ class ScreenCaptureControls:
                     (1600, max(1, int(image.height * ratio))),
                     Image.Resampling.LANCZOS,
                 )
-
             image_bytes = get_image_bytes(image, format="JPEG", quality=82)
-            self.window._enqueue_ai(
-                source="Screen capture",
-                image_bytes=image_bytes,
-            )
+            self.window.submit_screen_capture(image_bytes, source="Manual screen capture")
         except Exception as exc:
-            self.window.answer_display.setMarkdown(
-                f"### Screen capture failed\n\n`{exc}`"
-            )
+            self.window.answer_display.setMarkdown(f"### Screen capture failed\n\n`{exc}`")
             self.window._set_status("ERROR")
         finally:
             self.window.show()

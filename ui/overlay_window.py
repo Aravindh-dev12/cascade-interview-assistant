@@ -20,10 +20,15 @@ from pynput import keyboard
 import config
 from engine.audio_recorder import AudioRecorder
 from engine.copilot_ai import CopilotAI
-from engine.screen_grabber import capture_screen, get_image_bytes
+from engine.question_detector import is_substantive_question, should_attach_screen
+from engine.screen_watcher import ScreenWatcher
 from engine.stt_worker import STTWorker
 from ui.settings_dialog import SettingsDialog
 from utils.win_utils import set_window_invisible_to_capture
+
+
+def _practice_mode_enabled():
+    return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class HotkeySignaler(QObject):
@@ -32,27 +37,29 @@ class HotkeySignaler(QObject):
 
 
 class AIQueryWorker(QThread):
-    answer_ready = Signal(str)
+    chunk_ready = Signal(int, str)
+    answer_ready = Signal(int, str)
 
-    def __init__(self, copilot_ai, image_bytes=None, custom_query=None):
+    def __init__(self, request_id, copilot_ai, image_bytes=None, custom_query=None, use_image_history=False):
         super().__init__()
+        self.request_id = int(request_id)
         self.copilot_ai = copilot_ai
         self.image_bytes = image_bytes
         self.custom_query = custom_query
+        self.use_image_history = use_image_history
 
     def run(self):
-        self.answer_ready.emit(
-            self.copilot_ai.generate_answer(
-                image_bytes=self.image_bytes,
-                custom_query=self.custom_query,
-            )
-        )
-
-
-def _practice_mode_enabled():
-    return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+        pieces = []
+        for chunk in self.copilot_ai.generate_answer_stream(
+            image_bytes=self.image_bytes,
+            custom_query=self.custom_query,
+            use_image_history=self.use_image_history,
+        ):
+            if self.isInterruptionRequested():
+                break
+            pieces.append(chunk)
+            self.chunk_ready.emit(self.request_id, chunk)
+        self.answer_ready.emit(self.request_id, "".join(pieces).strip())
 
 
 class OverlayWindow(QWidget):
@@ -66,10 +73,7 @@ class OverlayWindow(QWidget):
             self.settings.get("mic_device_idx", -1),
             self.settings.get("system_device_idx", -1),
         )
-        self.stt_worker = STTWorker(
-            self.audio_recorder,
-            api_key=self.get_effective_nvidia_key(),
-        )
+        self.stt_worker = STTWorker(self.audio_recorder, api_key=self.get_effective_nvidia_key())
         self.copilot_ai = CopilotAI(
             model=self.settings.get("model", config.DEFAULT_GEMINI_MODEL),
             api_key=self.get_effective_gemini_key(),
@@ -81,16 +85,23 @@ class OverlayWindow(QWidget):
         self.hotkey_listener = None
 
         self.answer_history = []
+        self.request_queue = []
+        self.workers = {}
+        self.requests = {}
+        self.stale_request_ids = set()
+        self.next_request_id = 1
+        self.session_generation = 1
+        self.streaming_text = {}
+        self.latest_screen_bytes = None
+        self.latest_screen_time = 0.0
+        self.last_screen_answer_time = 0.0
         self.last_query_time = 0.0
-        self.ai_worker = None
-        self.ai_queue = []
-        self.active_source = None
+        self.last_interviewer_time = 0.0
 
         self._apply_window_flags()
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMinimumSize(430, 520)
-        self.resize(500, 720)
-
+        self.resize(510, 730)
         self.init_ui()
         self.setup_global_hotkeys()
 
@@ -99,6 +110,17 @@ class OverlayWindow(QWidget):
         self.stt_worker.status_updated.connect(self.update_status_log)
         self.stt_worker.error_occurred.connect(self.handle_stt_error)
         self.stt_worker.start()
+
+        self.screen_watcher = ScreenWatcher(
+            interval_ms=self.settings.get("screen_watch_interval_ms", 650),
+            stable_ms=self.settings.get("screen_stable_ms", 450),
+            change_threshold=self.settings.get("screen_change_threshold", 0.055),
+            parent=self,
+        )
+        self.screen_watcher.frame_ready.connect(self.handle_screen_frame)
+        self.screen_watcher.status_updated.connect(self.update_status_log)
+        self.screen_watcher.error_occurred.connect(self.update_status_log)
+        self._sync_screen_watcher(restart=True)
 
     def _ensure_audio_defaults(self):
         if (
@@ -116,10 +138,7 @@ class OverlayWindow(QWidget):
         self.setWindowFlags(flags)
 
     def get_effective_gemini_key(self):
-        return (
-            os.environ.get("GEMINI_API_KEY", "").strip()
-            or os.environ.get("GOOGLE_API_KEY", "").strip()
-        )
+        return os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
 
     def get_effective_nvidia_key(self):
         return os.environ.get("NVIDIA_API_KEY", "").strip()
@@ -168,7 +187,7 @@ class OverlayWindow(QWidget):
         brand.setSpacing(0)
         name = QLabel("quntumnintent")
         name.setObjectName("brandTitle")
-        subtitle = QLabel("live voice · chat · vision")
+        subtitle = QLabel("real-time voice · screen · answers")
         subtitle.setObjectName("brandSubtitle")
         brand.addWidget(name)
         brand.addWidget(subtitle)
@@ -176,7 +195,7 @@ class OverlayWindow(QWidget):
         self.status_badge = QLabel("IDLE")
         self.status_badge.setObjectName("statusBadge")
         self.status_badge.setAlignment(Qt.AlignCenter)
-        self.status_badge.setMinimumWidth(78)
+        self.status_badge.setMinimumWidth(82)
 
         settings_btn = QPushButton("⚙")
         settings_btn.setObjectName("iconButton")
@@ -227,8 +246,7 @@ class OverlayWindow(QWidget):
         self.answer_display.setOpenExternalLinks(True)
         self.answer_display.setMarkdown(
             "### Ready\n\n"
-            "Speak in practice mode, type a question, or capture the screen. "
-            "API credentials are loaded automatically from `.env`."
+            "Practice mode can listen continuously, keep the latest screen context, and stream answers as soon as they arrive."
         )
         answer_layout.addWidget(self.answer_display)
         body_layout.addWidget(answer_card, stretch=5)
@@ -236,11 +254,11 @@ class OverlayWindow(QWidget):
         transcript_header = QHBoxLayout()
         transcript_title = QLabel("LIVE TRANSCRIPT")
         transcript_title.setObjectName("eyebrow")
-        transcript_meta = QLabel("NVIDIA NEMOTRON")
-        transcript_meta.setObjectName("muted")
+        self.screen_meta = QLabel("SCREEN WATCH OFF")
+        self.screen_meta.setObjectName("muted")
         transcript_header.addWidget(transcript_title)
         transcript_header.addStretch()
-        transcript_header.addWidget(transcript_meta)
+        transcript_header.addWidget(self.screen_meta)
         body_layout.addLayout(transcript_header)
 
         transcript_card = QFrame()
@@ -254,7 +272,7 @@ class OverlayWindow(QWidget):
         self.partial_transcript_label.hide()
         self.transcript_display = QTextBrowser()
         self.transcript_display.setObjectName("transcriptDisplay")
-        self.transcript_display.setText("Listening starts automatically when enabled.")
+        self.transcript_display.setText("Listening starts automatically when practice mode is enabled.")
         transcript_layout.addWidget(self.partial_transcript_label)
         transcript_layout.addWidget(self.transcript_display)
         body_layout.addWidget(transcript_card, stretch=2)
@@ -266,7 +284,7 @@ class OverlayWindow(QWidget):
         composer_row.setSpacing(7)
         self.prompt_input = QLineEdit()
         self.prompt_input.setObjectName("promptInput")
-        self.prompt_input.setPlaceholderText("Ask anything about the current context…")
+        self.prompt_input.setPlaceholderText("Ask about the current conversation or screen…")
         self.prompt_input.returnPressed.connect(self.send_custom_query)
         send_btn = QPushButton("Send")
         send_btn.setObjectName("primaryButton")
@@ -336,17 +354,58 @@ class OverlayWindow(QWidget):
             self.move(event.globalPosition().toPoint() - self.drag_position)
             event.accept()
 
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, "screen_watcher") and not self.settings.get("capture_region"):
+            center = self.frameGeometry().center()
+            self.screen_watcher.set_capture_target(point=(center.x(), center.y()))
+            self._update_screen_exclusion()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "screen_watcher"):
+            self._update_screen_exclusion()
+
+    def _update_screen_exclusion(self):
+        if not hasattr(self, "screen_watcher"):
+            return
+        geometry = self.frameGeometry()
+        self.screen_watcher.set_exclude_rect(
+            (geometry.left(), geometry.top(), geometry.width(), geometry.height())
+        )
+
     def showEvent(self, event):
         super().showEvent(event)
         self.apply_invisible_mode()
 
     def apply_invisible_mode(self):
         try:
-            set_window_invisible_to_capture(
-                int(self.winId()), self.settings.get("invisible_mode", True)
-            )
+            set_window_invisible_to_capture(int(self.winId()), self.settings.get("invisible_mode", False))
         except Exception as exc:
             print(f"[overlay] Capture protection error: {exc}")
+
+    def _sync_screen_watcher(self, restart=False):
+        if not hasattr(self, "screen_watcher"):
+            return
+        enabled = bool(self.settings.get("auto_screen_watch", True) and _practice_mode_enabled())
+        region = self.settings.get("capture_region")
+        center = self.frameGeometry().center()
+        self.screen_watcher.set_capture_target(
+            region=region,
+            point=None if region else (center.x(), center.y()),
+        )
+        self._update_screen_exclusion()
+        if enabled and not self.screen_watcher.isRunning():
+            self.screen_watcher.start()
+        elif not enabled and self.screen_watcher.isRunning():
+            self.screen_watcher.stop()
+        elif restart and enabled and self.screen_watcher.isRunning():
+            self.screen_watcher.stop()
+            self.screen_watcher.interval_seconds = max(0.25, int(self.settings.get("screen_watch_interval_ms", 650)) / 1000.0)
+            self.screen_watcher.stable_seconds = max(0.2, int(self.settings.get("screen_stable_ms", 450)) / 1000.0)
+            self.screen_watcher.change_threshold = float(self.settings.get("screen_change_threshold", 0.055))
+            self.screen_watcher.start()
+        self.screen_meta.setText("SCREEN WATCH ON" if enabled else "SCREEN WATCH OFF")
 
     @Slot()
     def toggle_recording(self):
@@ -358,8 +417,15 @@ class OverlayWindow(QWidget):
             self._set_status("IDLE")
             return
 
+        if not _practice_mode_enabled():
+            QMessageBox.information(
+                self,
+                "Practice mode is off",
+                "Set PRACTICE_MODE=1 only for mock interviews or sessions where AI assistance is explicitly permitted.",
+            )
+            return
         if not self.get_effective_nvidia_key():
-            QMessageBox.warning(self, "NVIDIA key missing", "Add NVIDIA_API_KEY to the project .env and restart the app.")
+            QMessageBox.warning(self, "NVIDIA key missing", "Add NVIDIA_API_KEY to the project env file and restart the app.")
             return
 
         self.audio_recorder.set_devices(
@@ -368,9 +434,12 @@ class OverlayWindow(QWidget):
         )
         self.stt_worker.set_api_key(self.get_effective_nvidia_key())
         self.audio_recorder.start_recording()
-        if not self.audio_recorder.mic_stream and not self.audio_recorder.system_stream:
-            self.audio_recorder.stop_recording()
-            QMessageBox.warning(self, "Audio input unavailable", "No audio input could be opened. Choose a microphone or system loopback device in Settings.")
+        if not self.audio_recorder.is_recording:
+            QMessageBox.warning(
+                self,
+                "Audio input unavailable",
+                "No audio input could be opened. Choose a microphone or system loopback device in Settings.",
+            )
             return
 
         self.record_btn.setText("Stop")
@@ -389,30 +458,80 @@ class OverlayWindow(QWidget):
         self.copilot_ai.add_transcript_line(speaker, text)
 
         if self.transcript_display.toPlainText() in {
-            "Listening for speech…", "Listening starts automatically when enabled."
+            "Listening for speech…",
+            "Listening starts automatically when practice mode is enabled.",
         }:
             self.transcript_display.clear()
         color = "#60A5FA" if speaker == "Candidate" else "#FBBF24"
         self.transcript_display.append(
-            f'<b style="color:{color};">{speaker}</b>'
-            f'<span style="color:#64748B;"> · </span>{text}<br>'
+            f'<b style="color:{color};">{speaker}</b><span style="color:#64748B;"> · </span>{text}<br>'
         )
         self.transcript_display.moveCursor(QTextCursor.End)
 
-        if (
-            speaker == "Interviewer"
-            and len(text.strip()) > 8
-            and self.settings.get("auto_answer_speech", True)
+        if speaker != "Interviewer":
+            return
+        self.last_interviewer_time = time.monotonic()
+        if not (
+            self.settings.get("auto_answer_speech", True)
             and _practice_mode_enabled()
+            and is_substantive_question(text)
         ):
-            cooldown = float(self.settings.get("answer_cooldown_seconds", 1.2))
-            now = time.monotonic()
-            if now - self.last_query_time >= cooldown:
-                self.last_query_time = now
-                self._enqueue_ai(
-                    source=f"Spoken question: *{text}*",
-                    custom_query=None,
-                )
+            return
+
+        cooldown = float(self.settings.get("answer_cooldown_seconds", 0.6))
+        now = time.monotonic()
+        if now - self.last_query_time < cooldown:
+            return
+        self.last_query_time = now
+
+        image_bytes = None
+        if self.settings.get("include_screen_with_speech", True) and self.latest_screen_bytes:
+            max_age = float(self.settings.get("screen_context_max_age_seconds", 12.0))
+            if now - self.latest_screen_time <= max_age and should_attach_screen(text):
+                image_bytes = self.latest_screen_bytes
+
+        self._enqueue_ai(
+            source=f"Spoken question: *{text}*",
+            kind="speech",
+            image_bytes=image_bytes,
+            custom_query=f"Answer this interviewer question now: {text}",
+            use_image_history=False,
+        )
+
+    @Slot(bytes)
+    def handle_screen_frame(self, image_bytes):
+        self.latest_screen_bytes = image_bytes
+        self.latest_screen_time = time.monotonic()
+        self.screen_meta.setText("SCREEN CONTEXT LIVE")
+
+        # Continuous screen capture never competes with live listening. While listening,
+        # the latest frame is attached only when the spoken question refers to the screen.
+        if self.audio_recorder.is_recording:
+            return
+        if not self.settings.get("auto_answer_screen", True):
+            return
+        now = time.monotonic()
+        if now - self.last_screen_answer_time < 1.5:
+            return
+        self.last_screen_answer_time = now
+        self._enqueue_ai(
+            source="Screen changed",
+            kind="screen",
+            image_bytes=image_bytes,
+            custom_query="Analyze the new stable screen and answer the visible practice question if there is one.",
+            use_image_history=True,
+        )
+
+    def submit_screen_capture(self, image_bytes, source="Manual screen capture"):
+        self.latest_screen_bytes = image_bytes
+        self.latest_screen_time = time.monotonic()
+        self._enqueue_ai(
+            source=source,
+            kind="manual_screen",
+            image_bytes=image_bytes,
+            custom_query="Solve or explain the visible practice question.",
+            use_image_history=True,
+        )
 
     @Slot(str)
     def update_status_log(self, status):
@@ -432,22 +551,7 @@ class OverlayWindow(QWidget):
 
     @Slot()
     def trigger_text_analysis(self):
-        self._enqueue_ai(source="Current transcript", custom_query=None)
-
-    @Slot()
-    def trigger_screen_analysis(self):
-        self._configure_gemini()
-        try:
-            image = capture_screen(self.settings.get("capture_region"))
-            if image.width > 1280:
-                from PIL import Image
-                ratio = 1280.0 / image.width
-                image = image.resize((1280, int(image.height * ratio)), Image.Resampling.LANCZOS)
-            image_bytes = get_image_bytes(image, format="JPEG", quality=70)
-        except Exception as exc:
-            self.answer_display.setMarkdown(f"### Screen capture failed\n\n`{exc}`")
-            return
-        self._enqueue_ai(source="Screen capture", image_bytes=image_bytes)
+        self._enqueue_ai(source="Current transcript", kind="chat", custom_query="Answer the latest practice question.")
 
     @Slot()
     def send_custom_query(self):
@@ -455,55 +559,125 @@ class OverlayWindow(QWidget):
         if not query:
             return
         self.prompt_input.clear()
-        self._enqueue_ai(source=f"Chat: *{query}*", custom_query=query)
+        image = None
+        now = time.monotonic()
+        if self.latest_screen_bytes and now - self.latest_screen_time <= float(self.settings.get("screen_context_max_age_seconds", 12.0)):
+            image = self.latest_screen_bytes if should_attach_screen(query) else None
+        self._enqueue_ai(
+            source=f"Chat: *{query}*",
+            kind="chat",
+            image_bytes=image,
+            custom_query=query,
+            use_image_history=False,
+        )
 
-    def _enqueue_ai(self, source, image_bytes=None, custom_query=None):
+    def _priority_for(self, kind):
+        return {"speech": 0, "chat": 1, "manual_screen": 1, "screen": 3}.get(kind, 2)
+
+    def _enqueue_ai(self, source, kind="chat", image_bytes=None, custom_query=None, use_image_history=False):
         self._configure_gemini()
+        if not _practice_mode_enabled():
+            self.answer_display.setMarkdown(
+                "### Practice mode is off\n\nSet `PRACTICE_MODE=1` only for permitted practice sessions."
+            )
+            return
         if not self.get_effective_gemini_key():
-            self.answer_display.setMarkdown("### Gemini key missing\n\nAdd `GEMINI_API_KEY` to the project `.env` and restart the app.")
+            self.answer_display.setMarkdown("### Gemini key missing\n\nAdd `GEMINI_API_KEY` to the project env file.")
             self._set_status("ERROR")
             return
-        self.ai_queue.append((source, image_bytes, custom_query))
-        self._run_next_ai()
 
-    def _run_next_ai(self):
-        if self.ai_worker and self.ai_worker.isRunning():
+        request_id = self.next_request_id
+        self.next_request_id += 1
+        request = {
+            "id": request_id,
+            "source": source,
+            "kind": kind,
+            "image_bytes": image_bytes,
+            "custom_query": custom_query,
+            "use_image_history": use_image_history,
+            "priority": self._priority_for(kind),
+            "created": time.monotonic(),
+            "session": self.session_generation,
+        }
+
+        if kind in {"speech", "screen"}:
+            self.request_queue = [item for item in self.request_queue if item["kind"] != kind]
+
+        if kind == "speech":
+            for active_id, active in list(self.requests.items()):
+                if active.get("kind") == "screen":
+                    self.stale_request_ids.add(active_id)
+
+        self.request_queue.append(request)
+        self.request_queue.sort(key=lambda item: (item["priority"], item["created"]))
+        max_queue = 5
+        while len(self.request_queue) > max_queue:
+            self.request_queue.pop()
+        self._drain_ai_queue()
+
+    def _drain_ai_queue(self):
+        # Normally one request at a time. A speech request may run alongside a stale
+        # background screen request so visual work cannot break the speech latency target.
+        while self.request_queue and len(self.workers) < 2:
+            if len(self.workers) == 1:
+                only_active = next(iter(self.requests.values()))
+                next_request = self.request_queue[0]
+                if not (next_request["kind"] == "speech" and only_active.get("kind") == "screen"):
+                    return
+
+            request = self.request_queue.pop(0)
+            request_id = request["id"]
+            self.requests[request_id] = request
+            self.streaming_text[request_id] = ""
+            worker = AIQueryWorker(
+                request_id,
+                self.copilot_ai,
+                image_bytes=request["image_bytes"],
+                custom_query=request["custom_query"],
+                use_image_history=request["use_image_history"],
+            )
+            self.workers[request_id] = worker
+            worker.chunk_ready.connect(self._on_ai_chunk)
+            worker.answer_ready.connect(self._on_ai_answer)
+            worker.finished.connect(lambda rid=request_id: self._on_ai_worker_finished(rid))
             self._set_status("THINKING")
-            return
-        if not self.ai_queue:
-            self._set_status("LISTENING" if self.audio_recorder.is_recording else "IDLE")
-            return
+            if request_id not in self.stale_request_ids:
+                self.answer_display.setMarkdown(f"### {request['source']}\n\n…")
+            worker.start()
 
-        source, image_bytes, custom_query = self.ai_queue.pop(0)
-        self.active_source = source
-        self._set_status("THINKING")
-        self.answer_display.setMarkdown(f"### Thinking…\n\n{source}")
-        self.ai_worker = AIQueryWorker(
-            self.copilot_ai,
-            image_bytes=image_bytes,
-            custom_query=custom_query,
+    @Slot(int, str)
+    def _on_ai_chunk(self, request_id, chunk):
+        request = self.requests.get(request_id)
+        if not request or request_id in self.stale_request_ids or request.get("session") != self.session_generation:
+            return
+        self.streaming_text[request_id] = self.streaming_text.get(request_id, "") + chunk
+        self.answer_display.setMarkdown(
+            f"### {request['source']}\n\n{self.streaming_text[request_id]}"
         )
-        self.ai_worker.answer_ready.connect(self.display_ai_answer)
-        self.ai_worker.finished.connect(self._ai_worker_finished)
-        self.ai_worker.start()
+        self.answer_display.verticalScrollBar().setValue(0)
 
-    @Slot(str)
-    def display_ai_answer(self, markdown_text):
-        source = self.active_source or "Current context"
-        block = f"### {source}\n\n{markdown_text}"
+    @Slot(int, str)
+    def _on_ai_answer(self, request_id, answer):
+        request = self.requests.get(request_id)
+        if not request or request_id in self.stale_request_ids or request.get("session") != self.session_generation:
+            return
+        answer = answer or self.streaming_text.get(request_id, "")
+        block = f"### {request['source']}\n\n{answer}"
         self.answer_history.insert(0, block)
-        self.answer_history = self.answer_history[:16]
+        self.answer_history = self.answer_history[:12]
         self.answer_display.setMarkdown("\n\n---\n\n".join(self.answer_history))
         self.answer_display.verticalScrollBar().setValue(0)
 
-    @Slot()
-    def _ai_worker_finished(self):
-        worker = self.ai_worker
-        self.ai_worker = None
-        self.active_source = None
+    def _on_ai_worker_finished(self, request_id):
+        worker = self.workers.pop(request_id, None)
+        self.requests.pop(request_id, None)
+        self.streaming_text.pop(request_id, None)
+        self.stale_request_ids.discard(request_id)
         if worker:
             worker.deleteLater()
-        QTimer.singleShot(0, self._run_next_ai)
+        if not self.workers:
+            self._set_status("LISTENING" if self.audio_recorder.is_recording else "IDLE")
+        QTimer.singleShot(0, self._drain_ai_queue)
 
     def _set_status(self, state):
         palette = {
@@ -520,12 +694,17 @@ class OverlayWindow(QWidget):
 
     @Slot()
     def clear_context(self):
+        self.session_generation += 1
         self.copilot_ai.clear_history()
         self.answer_history.clear()
-        self.ai_queue.clear()
+        self.request_queue.clear()
+        self.latest_screen_bytes = None
+        for request_id, worker in list(self.workers.items()):
+            self.stale_request_ids.add(request_id)
+            worker.requestInterruption()
         self.transcript_display.setText("Transcript context cleared.")
         self.partial_transcript_label.hide()
-        self.answer_display.setMarkdown("### Cleared\n\nReady for a new session.")
+        self.answer_display.setMarkdown("### Cleared\n\nReady for a new practice session.")
 
     @Slot()
     def open_settings(self):
@@ -534,6 +713,13 @@ class OverlayWindow(QWidget):
             return
 
         was_recording = self.audio_recorder.is_recording
+        old_devices = (
+            self.settings.get("mic_device_idx", -1),
+            self.settings.get("system_device_idx", -1),
+        )
+        if was_recording:
+            self.audio_recorder.stop_recording()
+
         self.settings = dialog.settings.copy()
         self.mode_label.setText(self.settings.get("model", config.DEFAULT_GEMINI_MODEL))
         self.update_ui_stylesheet()
@@ -547,8 +733,21 @@ class OverlayWindow(QWidget):
         )
         self._configure_gemini()
         self.stt_worker.set_api_key(self.get_effective_nvidia_key())
+        self._sync_screen_watcher(restart=True)
 
-        if (
+        new_devices = (
+            self.settings.get("mic_device_idx", -1),
+            self.settings.get("system_device_idx", -1),
+        )
+        if was_recording and _practice_mode_enabled() and self.get_effective_nvidia_key():
+            self.audio_recorder.start_recording()
+            if self.audio_recorder.is_recording:
+                self.record_btn.setText("Stop")
+                self._set_status("LISTENING")
+            elif old_devices != new_devices:
+                self.record_btn.setText("Listen")
+                self._set_status("ERROR")
+        elif (
             not was_recording
             and self.settings.get("auto_start_listening", True)
             and _practice_mode_enabled()
@@ -559,9 +758,17 @@ class OverlayWindow(QWidget):
     def closeEvent(self, event):
         if self.hotkey_listener:
             self.hotkey_listener.stop()
+        if hasattr(self, "screen_watcher"):
+            self.screen_watcher.stop()
         self.audio_recorder.stop_recording()
         self.stt_worker.stop()
         controller = getattr(self, "mouse_passthrough_controller", None)
-        if controller:
+        if controller and hasattr(controller, "stop"):
             controller.stop()
+        monitor = getattr(self, "audio_device_monitor", None)
+        if monitor and hasattr(monitor, "stop"):
+            monitor.stop()
+        for worker in list(self.workers.values()):
+            worker.requestInterruption()
+            worker.wait(250)
         event.accept()

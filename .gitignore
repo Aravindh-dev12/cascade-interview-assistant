@@ -1,5 +1,9 @@
-# Environment variables
+# Local environment / secrets
 .env
+.env.local
+.env.txt
+env
+!.env.template
 
 # Python
 __pycache__/
@@ -25,9 +29,8 @@ wheels/
 
 # Virtual environments
 venv/
-env/
 ENV/
-.venv
+.venv/
 
 # IDE
 .vscode/

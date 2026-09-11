@@ -1,107 +1,130 @@
 # quntumnintent
 
-A Windows desktop practice assistant with a lightweight overlay, real-time microphone/system-audio transcription, chat, and screen-aware technical Q&A.
+A Windows desktop **practice assistant** for low-latency technical interview coaching. It combines microphone + system-audio transcription, screen context, live camera frames, local Qwen vision/reasoning, and a streaming answer overlay.
 
-## AI stack
+> Automatic coaching is intended only for mock interviews, practice sessions, or environments where AI assistance is explicitly permitted. `PRACTICE_MODE` is off by default.
 
-- **Google Gemini** for text, chat, and vision reasoning. Default model: `gemini-2.5-flash`.
-- **NVIDIA Nemotron streaming ASR** for low-latency real-time speech-to-text through NVIDIA Riva.
+## Real-time pipeline
 
-There is no OpenAI provider or OpenAI SDK path in the application.
+```text
+Bluetooth / USB / built-in microphone ─┐
+                                       ├─> NVIDIA Riva/Nemotron streaming ASR
+Browser / YouTube / Teams / Meet audio ┘       |
+        ^                                      | final interviewer question
+        |                                      v
+Windows default-speaker loopback           question detector
+                                                |
+Screen watcher ───────┐                         |
+                      ├─> latest visual context ├─> Qwen3.5 4B (Ollama)
+Live camera frames ───┘                         |      |
+                                                |      └─ streaming tokens
+                                                v
+                                             overlay
+```
 
-## Main workflow
+## Implemented
 
-- API credentials load automatically from the project-local `.env` when the app starts.
-- Settings never store or display Gemini/NVIDIA API keys.
-- In practice mode, listening can start automatically at launch.
-- Interviewer speech is transcribed in real time and can automatically trigger a concise Gemini answer.
-- Typed chat questions are answered using recent transcript context.
-- Screen capture sends the configured screen region plus recent transcript context to Gemini Vision.
-- Speech, chat, and screen requests share an internal queue, so requests are not discarded while another answer is running.
+- **Local Qwen:** `qwen3.5:4b` through Ollama with streamed answer chunks.
+- **Gemini fallback:** optional when a Gemini key is configured.
+- **Local-only mode:** `AI_PROVIDER=ollama` works without a Gemini key.
+- **Bluetooth/USB microphone hot-plug:** new microphones/headsets can become active while the app is running.
+- **Windows system audio:** the preferred `Default speaker loopback` source captures the current Windows output using WASAPI/SoundCard, so browser videos and supported meeting apps do not require Stereo Mix or a virtual cable.
+- **Camera hot-plug + live frames:** Qt `QVideoSink` samples the selected/default camera. Only the most recent JPEG is kept.
+- **Camera → Qwen:** press **Camera** to analyze the current frame, or ask a camera-aware spoken/typed question such as “what am I holding?” and the latest camera context is attached automatically.
+- **Screen + camera context:** when both are available, they are combined into a labeled vision image so Qwen can distinguish them.
+- **Speech-first scheduling:** visual context does not continuously occupy Qwen; ordinary voice questions stay text-only and high priority.
+- **No hover tooltips:** Qt tooltips are globally suppressed.
 
-Automatic speech coaching is intended only for mock interviews, practice sessions, or environments where AI assistance is explicitly permitted.
+## Latency target
 
-## Requirements
+For a warm local Qwen model, the target path is:
 
-- Windows 10/11 recommended for system-audio loopback and protected overlay features.
-- Python 3.9+.
-- Gemini API key.
-- NVIDIA API key for the hosted Nemotron/Riva speech endpoint.
+1. speaker stops;
+2. about 350 ms endpoint silence;
+3. NVIDIA returns the final transcript;
+4. local question detection runs immediately;
+5. Qwen starts streaming;
+6. first answer tokens appear in the overlay.
+
+The engineering target is roughly **1–2 seconds to first answer tokens** for voice-only questions. It is not a hard guarantee: ASR network latency, CPU/GPU speed, model load state, and image processing can increase it. Camera/screen images are attached only when relevant so normal voice questions stay on the fastest path.
 
 ## Install
 
-```bash
+```powershell
 git clone https://github.com/Aravindh-dev12/cascade-interview-assistant.git
 cd cascade-interview-assistant
+git checkout main
+
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-## Configure `.env`
-
-Copy the template once:
-
-```bash
 copy .env.template .env
 ```
 
-Put your credentials in `.env`:
+Install Ollama for Windows and pull the local model:
+
+```powershell
+ollama pull qwen3.5:4b
+```
+
+## Recommended `.env`
 
 ```env
-GEMINI_API_KEY=your-gemini-api-key
-GEMINI_MODEL=gemini-2.5-flash
-
-NVIDIA_API_KEY=your-nvidia-api-key
-NVIDIA_RIVA_SERVER=grpc.nvcf.nvidia.com:443
-NVIDIA_RIVA_FUNCTION_ID=bb0837de-8c7b-481f-9ec8-ef5663e9c1fa
-NVIDIA_RIVA_LANGUAGE=en-US
-
-# Enable hands-free transcript -> answer only for permitted practice use.
 PRACTICE_MODE=1
-```
 
-No API-key entry is required inside the Settings window. On startup, Settings reports whether Gemini and NVIDIA credentials were detected from `.env`.
+AI_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3.5:4b
+OLLAMA_NUM_CTX=8192
+OLLAMA_KEEP_ALIVE=30m
 
-Never commit a real `.env` file or credentials. If a key has ever been committed to Git history, revoke/rotate it even after replacing the current file with placeholders.
-
-## Real-time voice flow
-
-1. `AudioRecorder` captures 16 kHz microphone audio and, when available, Windows loopback/system audio.
-2. `STTWorker` opens NVIDIA Riva streaming sessions and emits interim transcripts immediately.
-3. Final transcript lines are added to Gemini conversation context.
-4. With `PRACTICE_MODE=1` and **Auto-answer** enabled, substantive interviewer speech queues a Gemini response automatically.
-5. New speech, chat, and screen requests wait in the same answer queue instead of being dropped.
-
-Latency can be tuned in `.env`:
-
-```env
-ASR_ENDPOINT_SECONDS=0.50
+NVIDIA_API_KEY=YOUR_NVIDIA_KEY
+ASR_ENDPOINT_SECONDS=0.35
 ASR_VAD_THRESHOLD=0.005
-ASR_MAX_UTTERANCE_SECONDS=20
-GEMINI_FAST_MIN_CHARS=120
-GEMINI_FAST_MAX_CHARS=700
+ASR_MAX_UTTERANCE_SECONDS=30
+
+WASAPI_LOOPBACK_SAMPLE_RATE=48000
 ```
 
-## Chat and screen answers
+Gemini is optional in `ollama` mode. To allow cloud fallback, use `AI_PROVIDER=auto` and add a valid `GEMINI_API_KEY`.
 
-Use the chat field in the overlay and press **Send** (or Enter) for a text question based on recent context.
+## Audio behavior
 
-Use **Capture screen** or `Ctrl+Shift+S` to capture the configured region and ask Gemini to solve or explain the visible question, code, diagram, or MCQ.
+In Settings, choose a microphone and use **Default speaker loopback** for system audio when available. Microphone audio is transcribed as `Candidate`; default-speaker/browser/meeting audio is transcribed as `Interviewer`.
 
-## Shortcuts
+The default-speaker source is designed for audio played through the current Windows output, including browser/video players and common meeting applications. When Windows audio topology changes, the monitor refreshes the active streams; newly connected microphones can also be selected automatically.
 
-- `Ctrl+Shift+A` — toggle live listening.
-- `Ctrl+Shift+S` — capture screen region and answer.
+## Camera behavior
+
+Choose the camera in Settings. In practice mode, live camera capture starts automatically using the selected camera or Windows default camera. Frames are sampled at about 450 ms by default, compressed, and kept only as the latest local context.
+
+Frames are **not** continuously submitted to Qwen. They are used when:
+
+- you press **Camera**;
+- a spoken/typed prompt refers to the camera, an object being shown, or asks “what do you see?”;
+- the request otherwise needs the combined visual context.
+
+This keeps continuous camera capture from competing with voice-answer latency.
+
+## Controls
+
+- `Ctrl+Shift+A` — start/stop microphone + system-audio listening.
+- `Ctrl+Shift+S` — capture screen and answer.
+- **Camera** — analyze the latest live camera frame.
+- **Capture screen** — analyze the current screen/selected region.
+- **Clear** — clear transcript and answer context.
 
 ## Run
 
-```bash
+```powershell
 python main.py
 ```
 
-If `PRACTICE_MODE=1`, `NVIDIA_API_KEY` is available, and **Start listening automatically** is enabled in Settings, the voice listener starts automatically shortly after launch.
+## Tests
 
-## Security
+```powershell
+python -m compileall -q .
+python -m unittest -q tests.test_question_detector
+```
 
-`.env.template` must contain placeholders only. Real credentials belong only in the ignored local `.env`; they are not copied into the app settings JSON.
+For Windows hardware verification, test microphone transcription, YouTube/system-audio transcription, Bluetooth hot-swap, the **Camera** button, and a spoken camera prompt such as “what am I holding in front of the camera?” separately.
