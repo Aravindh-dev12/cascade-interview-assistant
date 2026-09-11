@@ -23,6 +23,10 @@ from utils.realtime_multimodal import (
     install_local_provider_compat,
     install_settings_device_compat,
 )
+from utils.runtime_reliability import (
+    install_audio_device_recovery,
+    install_fast_hybrid_failover,
+)
 from utils.screen_capture_controls import ScreenCaptureControls
 
 
@@ -72,6 +76,7 @@ def main():
     app._tooltip_blocker = tooltip_blocker
     install_settings_device_compat()
     install_hybrid_provider_settings()
+    install_audio_device_recovery()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -88,6 +93,7 @@ def main():
     window = OverlayWindow()
     ensure_default_system_audio(window)
     install_local_provider_compat(window)
+    install_fast_hybrid_failover(window)
     window.show()
 
     screen_capture_controls = ScreenCaptureControls(window)
