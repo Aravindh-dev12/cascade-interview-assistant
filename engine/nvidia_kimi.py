@@ -48,8 +48,9 @@ class NvidiaKimiClient:
 
     @staticmethod
     def _data_url(image_bytes):
+        mime = "image/png" if image_bytes[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
         encoded = base64.b64encode(image_bytes).decode("ascii")
-        return f"data:image/jpeg;base64,{encoded}"
+        return f"data:{mime};base64,{encoded}"
 
     @staticmethod
     def _extract_delta(item):
@@ -102,13 +103,13 @@ class NvidiaKimiClient:
             "max_tokens": min(requested_tokens, token_cap),
             "seed": int(os.environ.get("NVIDIA_KIMI_SEED", "0")),
             "stream": True,
-            "temperature": float(os.environ.get("NVIDIA_KIMI_TEMPERATURE", "0.2")),
+            "temperature": float(os.environ.get("NVIDIA_KIMI_TEMPERATURE", "1.0")),
         }
 
         reasoning_effort = os.environ.get(
             "NVIDIA_KIMI_REASONING_EFFORT", "low"
         ).strip().lower()
-        if reasoning_effort in {"low", "medium", "high", "max"}:
+        if reasoning_effort in {"low", "high", "max"}:
             payload["reasoning_effort"] = reasoning_effort
 
         request = urllib.request.Request(
