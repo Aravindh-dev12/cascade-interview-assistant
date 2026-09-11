@@ -15,6 +15,7 @@ env_status = load_project_env(PROJECT_DIR)
 from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
+from utils.hybrid_settings_patch import install_hybrid_provider_settings
 from utils.mouse_passthrough import MousePassthroughController
 from utils.realtime_multimodal import (
     CameraVisionControls,
@@ -51,8 +52,6 @@ def _install_console_signal_handlers(app):
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, request_quit)
 
-    # Python only dispatches signals while the interpreter gets control. A short
-    # Qt timer keeps that happening even when QApplication.exec() owns the loop.
     signal_timer = QTimer(app)
     signal_timer.setInterval(100)
     signal_timer.timeout.connect(lambda: None)
@@ -72,6 +71,7 @@ def main():
     app.installEventFilter(tooltip_blocker)
     app._tooltip_blocker = tooltip_blocker
     install_settings_device_compat()
+    install_hybrid_provider_settings()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -80,8 +80,10 @@ def main():
     print(f"[env] NVIDIA_API_KEY loaded: {env_status['nvidia_loaded']}")
     print(f"[env] GEMINI_API_KEY loaded: {env_status['gemini_loaded']}")
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
+    print(f"[env] AI_PROVIDER: {os.environ.get('AI_PROVIDER', 'settings/default')}")
+    print(f"[env] NVIDIA_KIMI_MODEL: {os.environ.get('NVIDIA_KIMI_MODEL', 'moonshotai/kimi-k3')}")
     if not env_status["exists"]:
-        print("[env] WARNING: no project .env found. Copy .env.template to .env, then set PRACTICE_MODE=1 and your NVIDIA key.")
+        print("[env] WARNING: no project .env found. Copy .env.template to .env, then set PRACTICE_MODE=1 and your NEW rotated NVIDIA key.")
 
     window = OverlayWindow()
     ensure_default_system_audio(window)
