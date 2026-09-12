@@ -12,9 +12,10 @@ def _env_enabled(name, default=True):
 def install_visual_autopilot():
     """Route captured visual context into practice answers.
 
-    The current runtime is manual-first, so automatic screen watching is disabled by
-    config. This compatibility layer still owns the manual Capture path and ensures
-    repeated clicks keep only the newest waiting screenshot instead of building a queue.
+    The current runtime is manual-first. Manual Capture is scroll-aware: repeated
+    captures contribute to one current visual problem so long questions can be
+    reconstructed across several scroll positions. The Clear button resets that
+    accumulated visual context together with the rest of the session.
     """
     from ui import overlay_window as overlay_module
     from ui.settings_dialog import SettingsDialog
@@ -42,7 +43,7 @@ def install_visual_autopilot():
             now = time.monotonic()
             max_age = float(window.settings.get("screen_context_max_age_seconds", 12.0))
             visual_ready = bool(
-                window.settings.get("include_screen_with_speech", True)
+                window.settings.get("include_screen_with_speech", False)
                 and window.latest_screen_bytes
                 and now - window.latest_screen_time <= max_age
             )
@@ -61,9 +62,9 @@ def install_visual_autopilot():
         window.latest_screen_time = time.monotonic()
         window.screen_meta.setText("SCREEN ANALYSIS LIVE")
 
-        if not _env_enabled("AUTO_VISUAL_ANSWER", True):
+        if not _env_enabled("AUTO_VISUAL_ANSWER", False):
             return
-        if not window.settings.get("auto_answer_screen", True):
+        if not window.settings.get("auto_answer_screen", False):
             return
         if not overlay_module._practice_mode_enabled():
             return
@@ -78,26 +79,18 @@ def install_visual_autopilot():
         window.last_screen_answer_time = now
 
         _drop_queued_screen_requests(window)
-        mode = "while listening" if window.audio_recorder.is_recording else "screen-only"
         print(
-            f"[vision] Captured stable screen -> analyze now · {mode} · "
-            f"bytes={len(image_bytes)}"
+            f"[vision] Captured stable screen -> analyze now · bytes={len(image_bytes)}"
         )
         window._enqueue_ai(
             source="Screen question",
             kind="screen",
             image_bytes=image_bytes,
             custom_query=(
-                "Analyze exactly what is visible in this captured practice screen and answer it now. "
-                "First determine the problem type from the image. "
-                "For an MCQ, return the correct option and answer first, followed by a short reason. "
-                "For a coding question, identify the requested language when visible, give the approach, "
-                "complete correct code, and time/space complexity. "
-                "For debugging, identify the defect and provide corrected code. "
-                "For a simple technical, conceptual, aptitude, math, SQL, terminal, output, diagram, "
-                "or system-design question, give the direct answer first. "
-                "Read visible text/options/code carefully. If no answerable question is actually visible, "
-                "reply only NO_QUESTION_VISIBLE."
+                "Analyze the visible practice question. For an MCQ, give the correct option first and explain briefly. "
+                "For coding, use the currently visible selected/requested programming language; default to Python 3 "
+                "only if none is visible. Give a short approach, complete code, time/space complexity, and key edge "
+                "cases. For debugging, return corrected code. Do not invent unreadable text."
             ),
             use_image_history=False,
         )
@@ -106,9 +99,9 @@ def install_visual_autopilot():
         window.latest_screen_bytes = image_bytes
         window.latest_screen_time = time.monotonic()
 
-        # A manual capture is user intent. Remove older waiting screen/manual-screen
-        # requests so one slow request cannot cause several stale HackerRank captures
-        # to execute later. The active worker may finish; only the newest waiting frame remains.
+        # Manual scrolling can create multiple captures. Keep at most the newest waiting
+        # request while one is active, but make every executed manual request contribute
+        # to CopilotAI's visual history.
         active_manual = any(
             request.get("kind") == "manual_screen"
             for request in window.requests.values()
@@ -116,22 +109,26 @@ def install_visual_autopilot():
         _drop_queued_screen_requests(window, include_manual=True)
         if active_manual:
             print(
-                "[vision] A screenshot is already being analyzed; keeping this as the newest queued capture."
+                "[vision] A screenshot is already being analyzed; keeping this as the newest queued scroll capture."
             )
 
-        print(f"[vision] Manual screen capture -> analyze now · bytes={len(image_bytes)}")
+        print(
+            f"[vision] Manual screen capture -> analyze now · bytes={len(image_bytes)} · scroll-aware=true"
+        )
         window._enqueue_ai(
             source=source,
             kind="manual_screen",
             image_bytes=image_bytes,
             custom_query=(
-                "Analyze exactly what is visible in this screenshot and give the final answer now. "
-                "Classify it as MCQ, coding, debugging, simple/general question, math, SQL, terminal/output, "
-                "diagram, or system design. For MCQs give the correct option first. For coding give approach, "
-                "complete code, and time/space complexity. For debugging give the corrected code. "
-                "For all other visible questions give the direct answer first. Do not invent unreadable text."
+                "Solve the current visible practice question using this capture plus any earlier captures from the "
+                "same scrolling session. If this is an MCQ, put the correct option and answer first, then a concise "
+                "reason. If this is coding, honor the currently selected/requested language shown on screen; use "
+                "Python 3 only when no language is visible. Give a short approach, complete platform-compatible code, "
+                "time and space complexity, and important correctness/edge cases so the solution is designed for "
+                "hidden tests rather than only samples. If the question is incomplete because more content is below, "
+                "use previous scroll captures and say NEED_MORE_SCREEN only when a required part is genuinely missing."
             ),
-            use_image_history=False,
+            use_image_history=True,
         )
 
     def camera_init(controller, window):
@@ -153,11 +150,11 @@ def install_visual_autopilot():
         original_settings_init(dialog, current_settings, parent)
         if hasattr(dialog, "screen_answer_check"):
             dialog.screen_answer_check.setText(
-                "Immediately answer every stable visible practice question"
+                "Background screen answering is disabled; use Capture screen"
             )
         if hasattr(dialog, "include_screen_check"):
             dialog.include_screen_check.setText(
-                "Also attach the current screen when a spoken question explicitly refers to it"
+                "Attach a recent screen only when a spoken question explicitly refers to it"
             )
 
     OverlayWindow.handle_transcription = handle_transcription
