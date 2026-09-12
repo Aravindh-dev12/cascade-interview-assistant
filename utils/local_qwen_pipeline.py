@@ -104,15 +104,16 @@ def install_local_qwen_pipeline():
         ).start()
 
         if image_bytes_list:
+            # Clamp old .env values so a previous 20s timeout cannot break manual vision.
             first_timeout = _float_env(
-                "LOCAL_QWEN_VISION_FIRST_TOKEN_TIMEOUT_SECONDS", 60.0, 10.0, 180.0
+                "LOCAL_QWEN_VISION_FIRST_TOKEN_TIMEOUT_SECONDS", 60.0, 60.0, 180.0
             )
         else:
             first_timeout = _float_env(
-                "LOCAL_QWEN_FIRST_TOKEN_TIMEOUT_SECONDS", 45.0, 5.0, 120.0
+                "LOCAL_QWEN_FIRST_TOKEN_TIMEOUT_SECONDS", 45.0, 45.0, 120.0
             )
         idle_timeout = _float_env(
-            "LOCAL_QWEN_STREAM_IDLE_TIMEOUT_SECONDS", 45.0, 5.0, 120.0
+            "LOCAL_QWEN_STREAM_IDLE_TIMEOUT_SECONDS", 45.0, 15.0, 120.0
         )
         started = time.monotonic()
         first = True
