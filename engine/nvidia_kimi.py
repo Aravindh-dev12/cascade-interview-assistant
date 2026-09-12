@@ -125,12 +125,15 @@ class NvidiaKimiClient:
             method="POST",
         )
 
-        # Kimi-K3 always reasons before answering, so a 2-3 second socket timeout
-        # can abort a healthy request before the first SSE token arrives. Hybrid
-        # mode now hedges with local Qwen independently, so keeping the cloud
-        # socket alive longer improves reliability without blocking the UI.
-        configured_timeout = float(os.environ.get("NVIDIA_KIMI_TIMEOUT_SECONDS", "8.0"))
-        timeout = max(6.0, configured_timeout)
+        visual = bool(image_bytes_list)
+        if visual:
+            configured_timeout = float(
+                os.environ.get("NVIDIA_KIMI_VISION_TIMEOUT_SECONDS", "20.0")
+            )
+            timeout = max(10.0, configured_timeout)
+        else:
+            configured_timeout = float(os.environ.get("NVIDIA_KIMI_TIMEOUT_SECONDS", "8.0"))
+            timeout = max(6.0, configured_timeout)
 
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -157,6 +160,7 @@ class NvidiaKimiClient:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"NVIDIA Kimi unavailable: {exc.reason}") from exc
         except (TimeoutError, socket.timeout) as exc:
+            kind = "vision" if visual else "text"
             raise RuntimeError(
-                f"NVIDIA Kimi timed out after {timeout:.1f}s before/while streaming a response"
+                f"NVIDIA Kimi {kind} timed out after {timeout:.1f}s before/while streaming a response"
             ) from exc
