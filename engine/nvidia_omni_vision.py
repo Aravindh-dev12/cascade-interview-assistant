@@ -14,9 +14,9 @@ class NvidiaOmniVisionClient:
     """NVIDIA Nemotron Omni image-to-text client.
 
     The NVIDIA API key is read only from the environment. This client turns a
-    manually captured screen/camera frame into text context; local Qwen produces
-    the final answer. Transient hosted-worker saturation is retried before the
-    caller falls back to local Qwen vision.
+    manually captured practice screen/camera frame into structured visual text for
+    Gemini 2.5 Flash. Transient hosted-worker saturation is retried before the caller
+    falls back to direct Gemini image analysis.
     """
 
     def __init__(self, api_key=None, base_url=None, model=None):
@@ -170,19 +170,29 @@ class NvidiaOmniVisionClient:
             raise RuntimeError("No image bytes supplied to NVIDIA Omni vision")
 
         prompt = (
-            "Transcribe this interview-practice screenshot accurately for a second AI that will solve it. "
-            "Do NOT answer with only a category such as 'coding', 'MCQ', or 'general'. The actual visible "
-            "question text is mandatory whenever readable. Read the entire visible question, every answer "
-            "option, code, function signature, starter code, terminal/output text, constraints, examples, "
-            "tables, labels, and requested programming language. Preserve identifiers, operators, numbers, "
-            "and code exactly when readable. Do not invent text hidden by another window or outside the image. "
-            "Return this compact structure:\n"
+            "Transcribe this interview-practice screenshot accurately for Gemini, which will solve it. "
+            "This may be one scroll position from a long HackerRank/assessment problem, so capture every readable "
+            "fragment even when the full question is not visible. Do NOT answer with only a category. Read the actual "
+            "question text, title, every visible answer option, selected/highlighted option state, code, function "
+            "signature, starter code, input/output format, constraints, examples, tables, terminal/output text, and "
+            "programming-language selector. Preserve identifiers, operators, indentation, numbers, and code exactly "
+            "when readable. The active/selected programming language must reflect what is currently visible in this "
+            "capture; do not carry a language from another screenshot. Do not infer hidden text.\n\n"
+            "Return exactly these labeled sections (use UNKNOWN/NONE when not visible):\n"
             "TYPE: <MCQ/coding/debugging/math/SQL/output/system-design/general>\n"
-            "QUESTION: <actual visible question/problem statement>\n"
-            "OPTIONS: <all visible options, or NONE>\n"
-            "CODE_OR_CONTEXT: <visible code/constraints/examples/terminal text, or NONE>\n"
-            "If there is genuinely no readable question, return NO_READABLE_QUESTION followed by a short "
-            "description of what text is visible. Do not solve the problem."
+            "PROBLEM_TITLE: <visible title/name or UNKNOWN>\n"
+            "SCREEN_POSITION: <TOP/MIDDLE/BOTTOM/FULL/UNKNOWN>\n"
+            "ACTIVE_LANGUAGE: <exact visible selected/requested language, or UNKNOWN>\n"
+            "SELECTED_OPTION: <visibly selected MCQ option/answer or NONE>\n"
+            "QUESTION: <all actual visible problem-statement text in reading order>\n"
+            "OPTIONS: <all visible MCQ choices with labels, or NONE>\n"
+            "FUNCTION_SIGNATURE: <exact visible signature/stub or NONE>\n"
+            "INPUT_OUTPUT: <visible input/output contract or NONE>\n"
+            "CONSTRAINTS: <all visible constraints or NONE>\n"
+            "EXAMPLES: <all visible sample inputs/outputs/explanations or NONE>\n"
+            "CODE_OR_CONTEXT: <visible starter code/debugging code/terminal/table/diagram context or NONE>\n"
+            "If there is genuinely no readable practice question, set TYPE: general and QUESTION: NO_READABLE_QUESTION, "
+            "then describe only the readable visible context in CODE_OR_CONTEXT. Do not solve the problem."
         )
         if task_hint:
             prompt += f"\nUser intent: {task_hint}"
@@ -202,11 +212,11 @@ class NvidiaOmniVisionClient:
             ],
             "model": self.model,
             "max_tokens": max(
-                256,
-                int(os.environ.get("NVIDIA_VISION_MAX_TOKENS", "1400")),
+                512,
+                int(os.environ.get("NVIDIA_VISION_MAX_TOKENS", "1800")),
             ),
             "stream": False,
-            "temperature": float(os.environ.get("NVIDIA_VISION_TEMPERATURE", "0.2")),
+            "temperature": float(os.environ.get("NVIDIA_VISION_TEMPERATURE", "0.1")),
             "top_k": max(1, int(os.environ.get("NVIDIA_VISION_TOP_K", "1"))),
             "chat_template_kwargs": {"enable_thinking": False},
         }
