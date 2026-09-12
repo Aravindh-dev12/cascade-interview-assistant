@@ -2,14 +2,11 @@ import json
 import os
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".ai_interview_copilot_settings.json")
-DEFAULT_LOCAL_MODEL = "qwen3.5:4b"
-DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 DEFAULT_SETTINGS = {
-    "ai_provider": "ollama",  # final answers always come from local Qwen
-    "local_model": DEFAULT_LOCAL_MODEL,
-    "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
-    "ollama_num_ctx": 8192,
+    "ai_provider": "gemini",
+    "model": DEFAULT_GEMINI_MODEL,
     "mic_device_idx": -1,
     "system_device_idx": -1,
     "auto_detect_audio_devices": True,
@@ -43,13 +40,13 @@ DEFAULT_SETTINGS = {
 
 
 def _normalize_provider(provider):
-    # Legacy Kimi/hybrid values are intentionally migrated to local Qwen.
-    return "ollama"
+    # This build intentionally has one final-answer provider only.
+    return "gemini"
 
 
-def _normalize_local_model(model):
-    model = str(model or "").strip()
-    return model or DEFAULT_LOCAL_MODEL
+def _normalize_model(model):
+    # Pin the stable Gemini 2.5 Flash endpoint. Ignore stale saved model values.
+    return DEFAULT_GEMINI_MODEL
 
 
 def _apply_manual_control_policy(settings):
@@ -75,11 +72,7 @@ def load_settings():
             print(f"[config] Error loading settings: {exc}")
 
     settings["ai_provider"] = _normalize_provider(settings.get("ai_provider"))
-    settings["local_model"] = _normalize_local_model(settings.get("local_model"))
-    settings["ollama_base_url"] = str(
-        settings.get("ollama_base_url") or DEFAULT_OLLAMA_BASE_URL
-    ).rstrip("/")
-    settings["ollama_num_ctx"] = max(2048, int(settings.get("ollama_num_ctx", 8192)))
+    settings["model"] = _normalize_model(settings.get("model"))
     settings["camera_frame_interval_ms"] = max(
         200, int(settings.get("camera_frame_interval_ms", 450))
     )
@@ -90,23 +83,17 @@ def load_settings():
 
 
 def save_settings(settings):
-    """Persist runtime preferences only. NVIDIA_API_KEY stays in project .env."""
+    """Persist runtime preferences only. NVIDIA and Gemini API keys stay in project .env."""
     try:
         clean_settings = DEFAULT_SETTINGS.copy()
         for key in clean_settings:
             if key in settings:
                 clean_settings[key] = settings[key]
 
-        clean_settings["ai_provider"] = _normalize_provider(clean_settings.get("ai_provider"))
-        clean_settings["local_model"] = _normalize_local_model(
-            clean_settings.get("local_model")
+        clean_settings["ai_provider"] = _normalize_provider(
+            clean_settings.get("ai_provider")
         )
-        clean_settings["ollama_base_url"] = str(
-            clean_settings.get("ollama_base_url") or DEFAULT_OLLAMA_BASE_URL
-        ).rstrip("/")
-        clean_settings["ollama_num_ctx"] = max(
-            2048, int(clean_settings.get("ollama_num_ctx", 8192))
-        )
+        clean_settings["model"] = _normalize_model(clean_settings.get("model"))
         clean_settings["camera_frame_interval_ms"] = max(
             200, int(clean_settings.get("camera_frame_interval_ms", 450))
         )
