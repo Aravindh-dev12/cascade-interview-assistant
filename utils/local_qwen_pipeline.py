@@ -19,8 +19,9 @@ def install_local_qwen_pipeline():
     """Use local Qwen for every final answer and NVIDIA only for perception.
 
     Audio path: Parakeet/Riva -> transcript -> local Qwen -> overlay.
-    Visual path: screen/camera -> NVIDIA Nemotron Omni image-to-text -> local Qwen -> overlay.
-    Kimi is intentionally not used by this runtime pipeline.
+    Visual path: manual screen/camera -> NVIDIA Nemotron Omni image-to-text -> local Qwen.
+    If NVIDIA vision is busy/unavailable, the same manual image falls back directly to
+    Qwen vision instead of ending the request with a cloud-service error.
     """
     from engine import copilot_ai as ai_module
     from PySide6.QtWidgets import QLabel
@@ -29,6 +30,10 @@ def install_local_qwen_pipeline():
     CopilotAI = ai_module.CopilotAI
     if getattr(CopilotAI, "_local_qwen_pipeline_installed", False):
         return
+
+    # Automatic screenshot inference is gone, so warming the local model no longer
+    # races a startup vision request. Keep Qwen ready for Listen/Send/Capture actions.
+    os.environ["OLLAMA_WARMUP"] = "1"
 
     original_init = CopilotAI.__init__
     original_settings_init = SettingsDialog.__init__
@@ -71,9 +76,9 @@ def install_local_qwen_pipeline():
         if age > 5.0:
             ai.ollama.refresh_async()
         state = ai.ollama.model if ready else f"loading/checking {ai.ollama.model}"
-        return f"LOCAL · {state} · NVIDIA vision"
+        return f"LOCAL · {state} · NVIDIA vision + local vision fallback"
 
-    def bounded_qwen_stream(ai, prompt, max_tokens):
+    def bounded_qwen_stream(ai, prompt, max_tokens, image_bytes_list=None):
         events = queue.Queue()
 
         def run():
@@ -82,7 +87,7 @@ def install_local_qwen_pipeline():
                 for piece in ai._qwen_stream(
                     prompt,
                     max_tokens=max_tokens,
-                    image_bytes_list=None,
+                    image_bytes_list=image_bytes_list,
                 ):
                     if not piece:
                         continue
@@ -95,14 +100,19 @@ def install_local_qwen_pipeline():
         threading.Thread(
             target=run,
             daemon=True,
-            name="local-qwen-answer",
+            name="local-qwen-vision" if image_bytes_list else "local-qwen-answer",
         ).start()
 
-        first_timeout = _float_env(
-            "LOCAL_QWEN_FIRST_TOKEN_TIMEOUT_SECONDS", 20.0, 3.0, 120.0
-        )
+        if image_bytes_list:
+            first_timeout = _float_env(
+                "LOCAL_QWEN_VISION_FIRST_TOKEN_TIMEOUT_SECONDS", 60.0, 10.0, 180.0
+            )
+        else:
+            first_timeout = _float_env(
+                "LOCAL_QWEN_FIRST_TOKEN_TIMEOUT_SECONDS", 45.0, 5.0, 120.0
+            )
         idle_timeout = _float_env(
-            "LOCAL_QWEN_STREAM_IDLE_TIMEOUT_SECONDS", 30.0, 5.0, 120.0
+            "LOCAL_QWEN_STREAM_IDLE_TIMEOUT_SECONDS", 45.0, 5.0, 120.0
         )
         started = time.monotonic()
         first = True
@@ -111,15 +121,18 @@ def install_local_qwen_pipeline():
             try:
                 event_type, payload = events.get(timeout=timeout)
             except queue.Empty:
-                phase = "first token" if first else "stream"
+                phase = "vision first token" if image_bytes_list and first else (
+                    "first token" if first else "stream"
+                )
                 raise RuntimeError(
                     f"Local Qwen {phase} timeout after {timeout:.1f}s. "
-                    "Check `ollama ps` and GPU/CPU load."
+                    "Run `ollama ps` to verify qwen3.5:4b is loaded."
                 )
             if event_type == "chunk":
                 if first:
+                    mode = "vision" if image_bytes_list else "text"
                     print(
-                        f"[qwen] First answer token in {time.monotonic() - started:.2f}s · "
+                        f"[qwen] First {mode} answer token in {time.monotonic() - started:.2f}s · "
                         f"model={ai.ollama.model}"
                     )
                     first = False
@@ -140,7 +153,7 @@ def install_local_qwen_pipeline():
         )
         prompt = ai._build_prompt(task)
         max_tokens = int(os.environ.get("TEXT_MAX_TOKENS", "700"))
-        print("[pipeline] Parakeet/transcript text -> local Qwen")
+        print("[pipeline] Transcript/chat -> local Qwen")
         yield from bounded_qwen_stream(ai, prompt, max_tokens=max_tokens)
 
     def generate_vision_stream(
@@ -153,10 +166,36 @@ def install_local_qwen_pipeline():
         task = custom_query or (
             "Solve or explain the current visible practice question. Give the useful answer first."
         )
+        max_tokens = int(os.environ.get("VISION_MAX_TOKENS", "1200"))
+
         print(
-            f"[pipeline] Image -> NVIDIA Omni text extraction · bytes={len(image_bytes or b'')}"
+            f"[pipeline] Manual image -> NVIDIA Omni extraction · bytes={len(image_bytes or b'')}"
         )
-        visual_text = ai.omni_vision.extract(image_bytes, task_hint=task)
+        try:
+            visual_text = ai.omni_vision.extract(image_bytes, task_hint=task)
+        except Exception as exc:
+            # Hosted vision can transiently return 503/429. A manual Capture action
+            # should still produce an answer, so fall back to Qwen's image capability.
+            print(f"[vision] NVIDIA extraction unavailable: {exc}")
+            print("[vision] Falling back to local Qwen image analysis for this capture.")
+            fallback_prompt = ai._build_prompt(
+                task,
+                image_task=(
+                    "Read the supplied screenshot carefully. Detect whether it contains an MCQ, coding "
+                    "problem, debugging task, terminal/output question, SQL, diagram, system-design prompt, "
+                    "or general question. For MCQ give the option first; for coding give approach, correct "
+                    "code, and complexity; otherwise answer the visible question directly. Do not invent "
+                    "text that is not readable."
+                ),
+            )
+            yield from bounded_qwen_stream(
+                ai,
+                fallback_prompt,
+                max_tokens=max_tokens,
+                image_bytes_list=[image_bytes],
+            )
+            return
+
         qwen_task = (
             f"{task}\n\n"
             "NVIDIA NEMOTRON OMNI VISUAL EXTRACTION:\n"
@@ -168,34 +207,61 @@ def install_local_qwen_pipeline():
             "the extracted visual context."
         )
         prompt = ai._build_prompt(qwen_task)
-        max_tokens = int(os.environ.get("VISION_MAX_TOKENS", "1200"))
         print("[pipeline] NVIDIA visual text -> local Qwen")
         yield from bounded_qwen_stream(ai, prompt, max_tokens=max_tokens)
 
     def route_stream(ai, prompt, max_tokens, image_bytes_list=None):
         # Defensive compatibility for legacy callers: final generation is always local.
         if image_bytes_list:
-            visual_text = ai.omni_vision.extract(
-                image_bytes_list[-1],
-                task_hint="Use the current visual context to answer the request.",
-            )
-            prompt = (
-                prompt
-                + "\n\nNVIDIA NEMOTRON OMNI VISUAL EXTRACTION:\n"
-                + visual_text
-            )
-        yield from bounded_qwen_stream(ai, prompt, max_tokens=max_tokens)
+            try:
+                visual_text = ai.omni_vision.extract(
+                    image_bytes_list[-1],
+                    task_hint="Use the current visual context to answer the request.",
+                )
+                prompt = (
+                    prompt
+                    + "\n\nNVIDIA NEMOTRON OMNI VISUAL EXTRACTION:\n"
+                    + visual_text
+                )
+                image_bytes_list = None
+            except Exception as exc:
+                print(f"[vision] NVIDIA compatibility extraction failed: {exc}; using local vision.")
+        yield from bounded_qwen_stream(
+            ai,
+            prompt,
+            max_tokens=max_tokens,
+            image_bytes_list=image_bytes_list,
+        )
 
     def settings_init(dialog, current_settings, parent=None):
         original_settings_init(dialog, current_settings, parent)
         if hasattr(dialog, "provider_combo"):
             dialog.provider_combo.clear()
             dialog.provider_combo.addItem(
-                "Local Qwen 3.5 · NVIDIA Parakeet audio + Nemotron Omni vision",
+                "Local Qwen 3.5 · Parakeet audio · NVIDIA/local vision",
                 "ollama",
             )
             dialog.provider_combo.setCurrentIndex(0)
             dialog.provider_combo.setEnabled(False)
+
+        # The runtime is intentionally manual-first. Disable legacy auto controls so
+        # the UI matches actual behavior instead of suggesting background actions.
+        if hasattr(dialog, "auto_start_check"):
+            dialog.auto_start_check.setChecked(False)
+            dialog.auto_start_check.setEnabled(False)
+            dialog.auto_start_check.setText("Listening starts only when you click Listen")
+        if hasattr(dialog, "screen_watch_check"):
+            dialog.screen_watch_check.setChecked(False)
+            dialog.screen_watch_check.setEnabled(False)
+            dialog.screen_watch_check.setText("Screen capture runs only when you click Capture screen")
+        if hasattr(dialog, "screen_answer_check"):
+            dialog.screen_answer_check.setChecked(False)
+            dialog.screen_answer_check.setEnabled(False)
+            dialog.screen_answer_check.setText("Automatic background screen answering is disabled")
+        if hasattr(dialog, "include_screen_check"):
+            dialog.include_screen_check.setChecked(False)
+            dialog.include_screen_check.setEnabled(False)
+            dialog.include_screen_check.setText("Voice does not attach screenshots automatically")
 
         replacements = {
             "NVIDIA Kimi-K3 and local Qwen are the only answer engines. NVIDIA_API_KEY is loaded automatically from the project .env file.":
@@ -203,7 +269,7 @@ def install_local_qwen_pipeline():
             "Hybrid gives Kimi-K3 a short head start and races local Qwen when cloud latency is high. No API key is stored in Settings.":
                 "Local Qwen 3.5 generates every final answer. NVIDIA is used only for speech transcription and visual extraction. No API key is stored in Settings.",
             "Local fallback: install Ollama and run  ollama pull qwen3.5:4b. The app keeps Qwen warm and streams the first available answer.":
-                "Answer engine: install Ollama and run  ollama pull qwen3.5:4b. Parakeet transcripts and NVIDIA visual text are sent to this local model.",
+                "Answer engine: install Ollama and run  ollama pull qwen3.5:4b. The app warms Qwen at startup for faster manual responses.",
             "NVIDIA Riva/Nemotron uses the same NVIDIA_API_KEY from .env for streaming transcription.":
                 "NVIDIA Parakeet CTC uses the NVIDIA_API_KEY from .env for streaming transcription.",
         }
