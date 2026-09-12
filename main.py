@@ -15,18 +15,13 @@ env_status = load_project_env(PROJECT_DIR)
 from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
-from utils.hybrid_settings_patch import install_hybrid_provider_settings
 from utils.mouse_passthrough import MousePassthroughController
 from utils.realtime_multimodal import (
     CameraVisionControls,
     ensure_default_system_audio,
-    install_local_provider_compat,
     install_settings_device_compat,
 )
-from utils.runtime_reliability import (
-    install_audio_device_recovery,
-    install_fast_hybrid_failover,
-)
+from utils.runtime_reliability import install_audio_device_recovery
 from utils.screen_capture_controls import ScreenCaptureControls
 
 
@@ -75,7 +70,6 @@ def main():
     app.installEventFilter(tooltip_blocker)
     app._tooltip_blocker = tooltip_blocker
     install_settings_device_compat()
-    install_hybrid_provider_settings()
     install_audio_device_recovery()
 
     print(f"[env] project dir: {PROJECT_DIR}")
@@ -83,17 +77,18 @@ def main():
     print(f"[env] env exists: {env_status['exists']}")
     print(f"[env] detected names: {', '.join(env_status['detected_names']) or 'none'}")
     print(f"[env] NVIDIA_API_KEY loaded: {env_status['nvidia_loaded']}")
-    print(f"[env] GEMINI_API_KEY loaded: {env_status['gemini_loaded']}")
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
-    print(f"[env] AI_PROVIDER: {os.environ.get('AI_PROVIDER', 'settings/default')}")
+    print(f"[env] AI_PROVIDER: {os.environ.get('AI_PROVIDER', 'hybrid')}")
     print(f"[env] NVIDIA_KIMI_MODEL: {os.environ.get('NVIDIA_KIMI_MODEL', 'moonshotai/kimi-k3')}")
+    print(f"[env] OLLAMA_MODEL: {os.environ.get('OLLAMA_MODEL', 'qwen3.5:4b')}")
     if not env_status["exists"]:
-        print("[env] WARNING: no project .env found. Copy .env.template to .env, then set PRACTICE_MODE=1 and your NEW rotated NVIDIA key.")
+        print(
+            "[env] WARNING: no project .env found. Copy .env.template to .env, "
+            "then set PRACTICE_MODE=1 and NVIDIA_API_KEY."
+        )
 
     window = OverlayWindow()
     ensure_default_system_audio(window)
-    install_local_provider_compat(window)
-    install_fast_hybrid_failover(window)
     window.show()
 
     screen_capture_controls = ScreenCaptureControls(window)
@@ -115,7 +110,7 @@ def main():
     runtime_label_timer.setInterval(1200)
 
     def refresh_runtime_state():
-        window._configure_gemini()
+        window._configure_ai()
         window.mode_label.setText(window.copilot_ai.runtime_label())
         camera_vision_controls.sync_from_settings()
 
@@ -135,6 +130,8 @@ def main():
         QTimer.singleShot(250, window.toggle_recording)
 
     print("[main] quntumnintent running.")
+    print("AI: NVIDIA Kimi-K3 + local Qwen/Ollama only.")
+    print("NVIDIA_API_KEY is loaded only from the project .env file.")
     print("Ctrl+Shift+S: capture screen and answer.")
     print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
     print("Camera button: analyze the latest live camera frame.")
