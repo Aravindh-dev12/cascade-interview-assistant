@@ -23,6 +23,7 @@ def install_local_qwen_pipeline():
     Kimi is intentionally not used by this runtime pipeline.
     """
     from engine import copilot_ai as ai_module
+    from PySide6.QtWidgets import QLabel
     from ui.settings_dialog import SettingsDialog
 
     CopilotAI = ai_module.CopilotAI
@@ -128,7 +129,9 @@ def install_local_qwen_pipeline():
                     raise RuntimeError(f"Local Qwen produced no answer: {payload}")
                 return
             elif event_type == "error":
-                raise RuntimeError(f"Local Qwen failed: {payload}") from payload
+                if isinstance(payload, BaseException):
+                    raise RuntimeError(f"Local Qwen failed: {payload}") from payload
+                raise RuntimeError(f"Local Qwen failed: {payload}")
 
     def generate_text_stream(ai, custom_query=None):
         ai.set_config(provider="ollama")
@@ -193,6 +196,21 @@ def install_local_qwen_pipeline():
             )
             dialog.provider_combo.setCurrentIndex(0)
             dialog.provider_combo.setEnabled(False)
+
+        replacements = {
+            "NVIDIA Kimi-K3 and local Qwen are the only answer engines. NVIDIA_API_KEY is loaded automatically from the project .env file.":
+                "Local Qwen is the final answer engine. NVIDIA_API_KEY is loaded from .env for Parakeet speech-to-text and Nemotron Omni image-to-text.",
+            "Hybrid gives Kimi-K3 a short head start and races local Qwen when cloud latency is high. No API key is stored in Settings.":
+                "Local Qwen 3.5 generates every final answer. NVIDIA is used only for speech transcription and visual extraction. No API key is stored in Settings.",
+            "Local fallback: install Ollama and run  ollama pull qwen3.5:4b. The app keeps Qwen warm and streams the first available answer.":
+                "Answer engine: install Ollama and run  ollama pull qwen3.5:4b. Parakeet transcripts and NVIDIA visual text are sent to this local model.",
+            "NVIDIA Riva/Nemotron uses the same NVIDIA_API_KEY from .env for streaming transcription.":
+                "NVIDIA Parakeet CTC uses the NVIDIA_API_KEY from .env for streaming transcription.",
+        }
+        for label in dialog.findChildren(QLabel):
+            text = label.text()
+            if text in replacements:
+                label.setText(replacements[text])
 
     CopilotAI.__init__ = ai_init
     CopilotAI.set_config = set_config
