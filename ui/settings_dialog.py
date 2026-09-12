@@ -24,7 +24,6 @@ from engine.audio_recorder import AudioRecorder
 from ui.region_selector import RegionSelector
 from utils.camera_device_monitor import camera_device_id
 
-GEMINI_MODELS = ("gemini-2.5-flash", "gemini-2.5-pro")
 LOCAL_MODELS = (
     "qwen3.5:4b",
     "gemma4:e4b",
@@ -94,7 +93,10 @@ class SettingsDialog(QDialog):
         header_layout.setSpacing(4)
         title = QLabel("Assistant settings")
         title.setObjectName("title")
-        subtitle = QLabel("Local Qwen is preferred for low latency. Gemini remains available as a cloud fallback.")
+        subtitle = QLabel(
+            "NVIDIA Kimi-K3 and local Qwen are the only answer engines. "
+            "NVIDIA_API_KEY is loaded automatically from the project .env file."
+        )
         subtitle.setObjectName("muted")
         subtitle.setWordWrap(True)
         header_layout.addWidget(title)
@@ -111,14 +113,14 @@ class SettingsDialog(QDialog):
 
         ai_card, ai_layout = self._card(
             "AI runtime",
-            "Auto uses the local Ollama model when installed/running, then falls back to Gemini. Qwen3.5 4B is the recommended local coding+vision model.",
+            "Hybrid gives Kimi-K3 a short head start and races local Qwen when cloud latency is high. No API key is stored in Settings.",
         )
         ai_form = QFormLayout()
         self.provider_combo = QComboBox()
-        self.provider_combo.addItem("Auto · local first", "auto")
-        self.provider_combo.addItem("Local Ollama only", "ollama")
-        self.provider_combo.addItem("Gemini cloud only", "gemini")
-        provider_idx = self.provider_combo.findData(self.settings.get("ai_provider", "auto"))
+        self.provider_combo.addItem("Hybrid · Kimi K3 + local Qwen", "hybrid")
+        self.provider_combo.addItem("NVIDIA Kimi K3 only", "nvidia")
+        self.provider_combo.addItem("Local Qwen/Ollama only", "ollama")
+        provider_idx = self.provider_combo.findData(self.settings.get("ai_provider", "hybrid"))
         self.provider_combo.setCurrentIndex(provider_idx if provider_idx >= 0 else 0)
 
         self.local_model_combo = QComboBox()
@@ -126,28 +128,31 @@ class SettingsDialog(QDialog):
         self.local_model_combo.addItems(LOCAL_MODELS)
         self.local_model_combo.setCurrentText(self.settings.get("local_model", config.DEFAULT_LOCAL_MODEL))
 
-        self.ollama_url_edit = QLineEdit(self.settings.get("ollama_base_url", config.DEFAULT_OLLAMA_BASE_URL))
+        self.ollama_url_edit = QLineEdit(
+            self.settings.get("ollama_base_url", config.DEFAULT_OLLAMA_BASE_URL)
+        )
         self.ollama_ctx_spin = QSpinBox()
         self.ollama_ctx_spin.setRange(2048, 65536)
         self.ollama_ctx_spin.setSingleStep(2048)
         self.ollama_ctx_spin.setValue(int(self.settings.get("ollama_num_ctx", 8192)))
 
-        self.model_combo = QComboBox()
-        self.model_combo.addItems(GEMINI_MODELS)
-        current_model = self.settings.get("model", config.DEFAULT_GEMINI_MODEL)
-        model_idx = self.model_combo.findText(current_model)
-        self.model_combo.setCurrentIndex(model_idx if model_idx >= 0 else 0)
-
         ai_form.addRow("Provider", self.provider_combo)
         ai_form.addRow("Local model", self.local_model_combo)
         ai_form.addRow("Ollama URL", self.ollama_url_edit)
         ai_form.addRow("Local context", self.ollama_ctx_spin)
-        ai_form.addRow("Gemini fallback", self.model_combo)
         ai_layout.addLayout(ai_form)
 
+        key_status = QLabel(
+            "NVIDIA_API_KEY: loaded from .env"
+            if os.environ.get("NVIDIA_API_KEY", "").strip()
+            else "NVIDIA_API_KEY: missing from .env"
+        )
+        key_status.setObjectName("muted")
+        ai_layout.addWidget(key_status)
+
         local_note = QLabel(
-            "Recommended: install Ollama, then run  ollama pull qwen3.5:4b.  "
-            "The app keeps the model warm and streams tokens immediately."
+            "Local fallback: install Ollama and run  ollama pull qwen3.5:4b. "
+            "The app keeps Qwen warm and streams the first available answer."
         )
         local_note.setObjectName("muted")
         local_note.setWordWrap(True)
@@ -156,7 +161,7 @@ class SettingsDialog(QDialog):
 
         voice_card, voice_layout = self._card(
             "Live voice",
-            "NVIDIA Nemotron/Riva handles streaming transcription. New USB/Bluetooth microphones can be selected automatically while the app is running.",
+            "NVIDIA Riva/Nemotron uses the same NVIDIA_API_KEY from .env for streaming transcription.",
         )
         self.auto_start_check = QCheckBox("Start listening automatically")
         self.auto_start_check.setChecked(self.settings.get("auto_start_listening", True))
@@ -177,17 +182,11 @@ class SettingsDialog(QDialog):
         audio_form.addRow("Microphone", self.mic_combo)
         audio_form.addRow("System audio", self.system_combo)
         voice_layout.addLayout(audio_form)
-        status = QLabel(
-            f"Gemini: {'key found' if os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') else 'optional / no key'}  ·  "
-            f"NVIDIA: {'key found' if os.environ.get('NVIDIA_API_KEY') else 'key missing'}"
-        )
-        status.setObjectName("muted")
-        voice_layout.addWidget(status)
         content_layout.addWidget(voice_card)
 
         camera_card, camera_layout = self._card(
             "Camera devices",
-            "Cameras are detected through Windows/Qt media devices without opening the camera stream. USB, virtual, and supported Bluetooth camera changes are tracked automatically.",
+            "The selected camera is captured live in practice mode. The latest compressed frame is kept locally and attached only when visual context is needed.",
         )
         camera_form = QFormLayout()
         self.camera_combo = QComboBox()
@@ -203,13 +202,13 @@ class SettingsDialog(QDialog):
 
         screen_card, screen_layout = self._card(
             "Real-time screen context",
-            "The watcher captures locally and only emits a frame after a meaningful visual change becomes stable. While listening, it updates context without competing with the speech answer request.",
+            "The watcher captures locally and emits a frame after a meaningful visual change becomes stable. While listening, it updates context without competing with speech transcription.",
         )
         self.screen_watch_check = QCheckBox("Continuously watch the selected screen/region")
         self.screen_watch_check.setChecked(self.settings.get("auto_screen_watch", True))
         self.screen_answer_check = QCheckBox("Automatically answer stable screen-only questions when not listening")
         self.screen_answer_check.setChecked(self.settings.get("auto_answer_screen", True))
-        self.include_screen_check = QCheckBox("Attach recent screen context when speech refers to visible code/error/question")
+        self.include_screen_check = QCheckBox("Attach recent visual context when speech refers to visible code/error/question")
         self.include_screen_check.setChecked(self.settings.get("include_screen_with_speech", True))
         screen_layout.addWidget(self.screen_watch_check)
         screen_layout.addWidget(self.screen_answer_check)
@@ -360,7 +359,6 @@ class SettingsDialog(QDialog):
         self.settings["local_model"] = self.local_model_combo.currentText().strip() or config.DEFAULT_LOCAL_MODEL
         self.settings["ollama_base_url"] = self.ollama_url_edit.text().strip() or config.DEFAULT_OLLAMA_BASE_URL
         self.settings["ollama_num_ctx"] = self.ollama_ctx_spin.value()
-        self.settings["model"] = self.model_combo.currentText()
         self.settings["auto_start_listening"] = self.auto_start_check.isChecked()
         self.settings["auto_answer_speech"] = self.auto_answer_check.isChecked()
         self.settings["auto_detect_audio_devices"] = self.auto_audio_check.isChecked()
