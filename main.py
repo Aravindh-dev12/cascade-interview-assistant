@@ -23,6 +23,7 @@ from utils.realtime_multimodal import (
 )
 from utils.runtime_reliability import install_audio_device_recovery
 from utils.screen_capture_controls import ScreenCaptureControls
+from utils.visual_autopilot import install_visual_autopilot
 
 
 class TooltipBlocker(QObject):
@@ -71,6 +72,7 @@ def main():
     app._tooltip_blocker = tooltip_blocker
     install_settings_device_compat()
     install_audio_device_recovery()
+    install_visual_autopilot()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -132,6 +134,8 @@ def main():
     print("[main] quntumnintent running.")
     print("AI: NVIDIA Kimi-K3 + local Qwen/Ollama only.")
     print("NVIDIA_API_KEY is loaded only from the project .env file.")
+    print("Visual autopilot: stable screen questions are analyzed automatically.")
+    print("Fresh screen/camera context is attached to substantive interviewer questions.")
     print("Ctrl+Shift+S: capture screen and answer.")
     print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
     print("Camera button: analyze the latest live camera frame.")
