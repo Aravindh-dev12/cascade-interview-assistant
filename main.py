@@ -19,6 +19,7 @@ from utils.candidate_context import install_candidate_context
 from utils.inference_watchdog import install_inference_watchdog
 from utils.local_qwen_pipeline import install_local_qwen_pipeline
 from utils.mouse_passthrough import MousePassthroughController
+from utils.parakeet_runtime import install_parakeet_runtime
 from utils.realtime_multimodal import (
     CameraVisionControls,
     ensure_default_system_audio,
@@ -79,6 +80,7 @@ def main():
     install_inference_watchdog()
     install_candidate_context()
     install_local_qwen_pipeline()
+    install_parakeet_runtime()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -86,7 +88,7 @@ def main():
     print(f"[env] detected names: {', '.join(env_status['detected_names']) or 'none'}")
     print(f"[env] NVIDIA_API_KEY loaded: {env_status['nvidia_loaded']}")
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
-    print(f"[env] AI_PROVIDER: ollama (forced final answer engine)")
+    print("[env] AI_PROVIDER: ollama (forced final answer engine)")
     print(f"[env] OLLAMA_MODEL: {os.environ.get('OLLAMA_MODEL', 'qwen3.5:4b')}")
     print(
         f"[env] NVIDIA_VISION_MODEL: "
