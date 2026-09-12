@@ -10,12 +10,13 @@ def _env_enabled(name, default=True):
 
 
 def install_visual_autopilot():
-    """Keep visual context fresh without starving real-time spoken answers.
+    """Turn every meaningful captured screen into an immediate practice answer.
 
-    While live listening is active, stable screen frames are cached continuously but
-    are not submitted on their own. A spoken question attaches the fresh visual only
-    when the question actually refers to the visible problem/code/MCQ/camera. Manual
-    Capture and Camera actions always force an immediate vision request.
+    ScreenWatcher already filters ordinary motion and emits only the first usable frame
+    plus stable meaningful changes. Every emitted frame is therefore eligible for one
+    vision request, even while audio listening is active. The overlay queue keeps only
+    the newest pending automatic screen request, so a slow visual request cannot build
+    an unbounded backlog.
     """
     from ui import overlay_window as overlay_module
     from ui.settings_dialog import SettingsDialog
@@ -30,18 +31,12 @@ def install_visual_autopilot():
     original_analyze_camera = CameraVisionControls.analyze_camera
     original_settings_init = SettingsDialog.__init__
 
-    def _screen_request_pending(window):
-        if any(item.get("kind") == "screen" for item in window.requests.values()):
-            return True
-        return any(item.get("kind") == "screen" for item in window.request_queue)
-
     def _supersede_auto_screen_requests(window):
+        # Keep the latest pending stable frame only. Active work is allowed to finish,
+        # while a newer captured frame waits behind it and replaces any older queued one.
         window.request_queue = [
             item for item in window.request_queue if item.get("kind") != "screen"
         ]
-        for request_id, active in list(window.requests.items()):
-            if active.get("kind") == "screen":
-                window.stale_request_ids.add(request_id)
 
     def handle_transcription(window, speaker, text):
         if speaker == "Interviewer" and overlay_module.is_substantive_question(text):
@@ -55,25 +50,17 @@ def install_visual_autopilot():
             needs_visual = overlay_module.should_attach_screen(text)
             if visual_ready and needs_visual:
                 print(
-                    f"[vision] Interviewer prompt needs visual context · "
+                    f"[vision] Interviewer prompt needs current screen context · "
                     f"age={now - window.latest_screen_time:.2f}s"
                 )
             elif visual_ready:
-                print("[vision] Interviewer prompt routed text-only; cached screen not attached.")
+                print("[vision] Spoken question routed text-only; screen is analyzed independently.")
         return original_handle_transcription(window, speaker, text)
 
     def handle_screen_frame(window, image_bytes):
         window.latest_screen_bytes = image_bytes
         window.latest_screen_time = time.monotonic()
-        window.screen_meta.setText("SCREEN CONTEXT LIVE")
-
-        # During an interview, screen capture remains live but inference is driven by
-        # interviewer intent. This prevents screenshots from flooding Kimi/Qwen and
-        # starving a simple spoken question such as "Tell me about yourself".
-        if window.audio_recorder.is_recording and not _env_enabled(
-            "AUTO_VISUAL_WHILE_LISTENING", False
-        ):
-            return
+        window.screen_meta.setText("SCREEN ANALYSIS LIVE")
 
         if not _env_enabled("AUTO_VISUAL_ANSWER", True):
             return
@@ -81,33 +68,44 @@ def install_visual_autopilot():
             return
         if not overlay_module._practice_mode_enabled():
             return
-        if _screen_request_pending(window):
+
+        # The requested behavior is capture -> answer even while the microphone and
+        # system-audio listener are running. AUTO_VISUAL_WHILE_LISTENING defaults on.
+        if window.audio_recorder.is_recording and not _env_enabled(
+            "AUTO_VISUAL_WHILE_LISTENING", True
+        ):
             return
 
         now = time.monotonic()
         cooldown = max(
-            1.5,
-            float(os.environ.get("VISUAL_AUTO_ANSWER_COOLDOWN_SECONDS", "4.0")),
+            0.35,
+            float(os.environ.get("VISUAL_AUTO_ANSWER_COOLDOWN_SECONDS", "0.75")),
         )
         if now - window.last_screen_answer_time < cooldown:
             return
         window.last_screen_answer_time = now
 
+        _supersede_auto_screen_requests(window)
+        mode = "while listening" if window.audio_recorder.is_recording else "screen-only"
         print(
-            f"[vision] Stable screen frame -> AI · screen-only · "
-            f"bytes={len(image_bytes)} · frames=1"
+            f"[vision] Captured stable screen -> analyze now · {mode} · "
+            f"bytes={len(image_bytes)}"
         )
         window._enqueue_ai(
-            source="Visible question",
+            source="Screen question",
             kind="screen",
             image_bytes=image_bytes,
             custom_query=(
-                "Inspect the visible practice question and answer it now. "
-                "If it is an MCQ, put the correct option/answer first and then one short reason. "
-                "If it is a coding problem, state the approach briefly, then provide correct code and complexity. "
-                "If it is debugging, identify the bug and give the corrected code. "
-                "If it is a conceptual, system-design, diagram, terminal, SQL, or output question, answer directly. "
-                "If no actual question is visible, do not invent one; reply only NO_QUESTION_VISIBLE."
+                "Analyze exactly what is visible in this captured practice screen and answer it now. "
+                "First determine the problem type from the image. "
+                "For an MCQ, return the correct option and answer first, followed by a short reason. "
+                "For a coding question, identify the requested language when visible, give the approach, "
+                "complete correct code, and time/space complexity. "
+                "For debugging, identify the defect and provide corrected code. "
+                "For a simple technical, conceptual, aptitude, math, SQL, terminal, output, diagram, "
+                "or system-design question, give the direct answer first. "
+                "Read visible text/options/code carefully. If no answerable question is actually visible, "
+                "reply only NO_QUESTION_VISIBLE."
             ),
             use_image_history=False,
         )
@@ -116,16 +114,17 @@ def install_visual_autopilot():
         window.latest_screen_bytes = image_bytes
         window.latest_screen_time = time.monotonic()
         _supersede_auto_screen_requests(window)
-        print(f"[vision] Manual screen capture -> AI · bytes={len(image_bytes)}")
+        print(f"[vision] Manual screen capture -> analyze now · bytes={len(image_bytes)}")
         window._enqueue_ai(
             source=source,
             kind="manual_screen",
             image_bytes=image_bytes,
             custom_query=(
-                "Analyze the captured practice question completely. "
-                "For MCQs, give the correct option first. For coding, give the approach, correct code, "
-                "and time/space complexity. For debugging, errors, SQL, output, diagrams, or conceptual "
-                "questions, give the direct answer first. Read all visible text carefully."
+                "Analyze exactly what is visible in this screenshot and give the final answer now. "
+                "Classify it as MCQ, coding, debugging, simple/general question, math, SQL, terminal/output, "
+                "diagram, or system design. For MCQs give the correct option first. For coding give approach, "
+                "complete code, and time/space complexity. For debugging give the corrected code. "
+                "For all other visible questions give the direct answer first. Do not invent unreadable text."
             ),
             use_image_history=False,
         )
@@ -141,7 +140,7 @@ def install_visual_autopilot():
         if controller.latest_camera_bytes:
             _supersede_auto_screen_requests(controller.window)
             print(
-                f"[vision] Camera frame -> AI · bytes={len(controller.latest_camera_bytes)}"
+                f"[vision] Camera frame -> analyze now · bytes={len(controller.latest_camera_bytes)}"
             )
         return original_analyze_camera(controller)
 
@@ -149,11 +148,11 @@ def install_visual_autopilot():
         original_settings_init(dialog, current_settings, parent)
         if hasattr(dialog, "screen_answer_check"):
             dialog.screen_answer_check.setText(
-                "Automatically analyze stable visible questions when not listening"
+                "Immediately answer stable screen questions, including while listening"
             )
         if hasattr(dialog, "include_screen_check"):
             dialog.include_screen_check.setText(
-                "Attach fresh screen/camera only when the interviewer refers to it"
+                "Also attach the current screen when a spoken question explicitly refers to it"
             )
 
     OverlayWindow.handle_transcription = handle_transcription
