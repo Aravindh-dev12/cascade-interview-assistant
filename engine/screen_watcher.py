@@ -9,7 +9,7 @@ from engine.screen_grabber import capture_screen, monitor_for_point
 
 
 class ScreenWatcher(QThread):
-    """Continuously watch a region/monitor and emit only stable, meaningful visual changes."""
+    """Continuously watch a region/monitor and emit stable, meaningful visual context."""
 
     frame_ready = Signal(bytes)
     status_updated = Signal(str)
@@ -122,7 +122,12 @@ class ScreenWatcher(QThread):
                 now = time.monotonic()
 
                 if self._last_emitted_fp is None:
+                    # Emit the initial visual context instead of silently using it only
+                    # as a baseline. This lets an MCQ/coding question already visible at
+                    # startup be analyzed without waiting for an unrelated screen change.
+                    payload = self._encode(image)
                     self._last_emitted_fp = fp
+                    self.frame_ready.emit(payload)
                 else:
                     changed_from_last = self._distance(self._last_emitted_fp, fp)
                     if changed_from_last < self.change_threshold:
