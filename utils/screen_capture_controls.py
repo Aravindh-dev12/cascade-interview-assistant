@@ -1,5 +1,4 @@
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QPushButton, QWidget
+from PySide6.QtWidgets import QPushButton, QWidget
 
 from engine.screen_grabber import capture_screen, get_image_bytes
 
@@ -38,11 +37,9 @@ class ScreenCaptureControls:
         point = (center.x(), center.y())
         region = self.window.settings.get("capture_region")
 
-        # Hide only for explicit manual captures so the frame is clean even when
-        # Windows display-affinity protection is disabled or unsupported.
-        self.window.hide()
-        QApplication.processEvents()
-        QTimer.singleShot(100, lambda: self._perform_capture(region, point))
+        # Keep the overlay visible. Capture protection/masking is handled by the
+        # normal window/capture pipeline; manual capture should not make the UI vanish.
+        self._perform_capture(region, point)
 
     def _perform_capture(self, region, point):
         try:
@@ -56,14 +53,10 @@ class ScreenCaptureControls:
                     Image.Resampling.LANCZOS,
                 )
             image_bytes = get_image_bytes(image, format="JPEG", quality=82)
+            print(f"[capture] Manual screenshot captured · bytes={len(image_bytes)}")
             self.window.submit_screen_capture(image_bytes, source="Manual screen capture")
         except Exception as exc:
             self.window.answer_display.setMarkdown(f"### Screen capture failed\n\n`{exc}`")
             self.window._set_status("ERROR")
         finally:
-            self.window.show()
-            self.window.raise_()
-            self.window.activateWindow()
-            if hasattr(self.window, "apply_invisible_mode"):
-                self.window.apply_invisible_mode()
             self.capture_in_progress = False
