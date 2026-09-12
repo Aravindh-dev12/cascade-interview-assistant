@@ -3,11 +3,12 @@ from engine.audio_recorder import AudioRecorder
 
 
 def install_audio_device_recovery():
-    """Validate persisted PortAudio indices before every listening start.
+    """Validate persisted audio routing and recover devices that fail at open time.
 
-    Windows/PortAudio device indices are not stable across reboots, Bluetooth
-    reconnects, USB changes, driver updates, or docking. Persisted indices are
-    therefore treated as hints and replaced with current devices when stale.
+    Windows/PortAudio device indices are not stable, and some stale WDM/KS entries
+    can still enumerate as valid even though opening the stream fails. We therefore
+    validate indices first, then perform one automatic retry with the current
+    Windows default microphone when the selected microphone cannot actually start.
     """
     from ui.overlay_window import OverlayWindow
 
@@ -51,14 +52,63 @@ def install_audio_device_recovery():
             window.audio_recorder.set_devices(next_mic, next_system)
             config.save_settings(window.settings)
 
+    def _retry_failed_microphone(window):
+        recorder = window.audio_recorder
+        selected_mic = int(window.settings.get("mic_device_idx", -1))
+        if selected_mic < 0 or recorder.mic_stream is not None:
+            return False
+
+        try:
+            auto_mic, _ = AudioRecorder.auto_detect_devices()
+            auto_mic = int(auto_mic)
+        except Exception as exc:
+            print(f"[audio] Could not recover failed microphone: {exc}")
+            return False
+
+        if auto_mic < 0 or auto_mic == selected_mic:
+            print(
+                f"[audio] Microphone {selected_mic} failed to open and no different "
+                "default microphone is available."
+            )
+            return False
+
+        system_idx = int(window.settings.get("system_device_idx", -1))
+        print(
+            f"[audio] Microphone {selected_mic} enumerated but failed to open; "
+            f"retrying with current default mic {auto_mic}."
+        )
+
+        # The system loopback may already have started successfully. Restart both
+        # streams once so STT receives a clean pair of queues and the recovered mic.
+        if recorder.is_recording:
+            recorder.stop_recording()
+
+        window.settings["mic_device_idx"] = auto_mic
+        recorder.set_devices(auto_mic, system_idx)
+        config.save_settings(window.settings)
+        original_toggle_recording(window)
+
+        if recorder.mic_stream is not None:
+            print(f"[audio] Microphone recovery succeeded · mic={auto_mic}")
+            return True
+
+        print(f"[audio] Default microphone {auto_mic} also failed to open.")
+        return False
+
     def toggle_recording(window):
-        if not window.audio_recorder.is_recording:
+        starting = not window.audio_recorder.is_recording
+        if starting:
             window._ensure_audio_defaults()
             window.audio_recorder.set_devices(
                 window.settings.get("mic_device_idx", -1),
                 window.settings.get("system_device_idx", -1),
             )
-        return original_toggle_recording(window)
+
+        result = original_toggle_recording(window)
+
+        if starting and window.audio_recorder.is_recording:
+            _retry_failed_microphone(window)
+        return result
 
     OverlayWindow._ensure_audio_defaults = ensure_audio_defaults
     OverlayWindow.toggle_recording = toggle_recording
