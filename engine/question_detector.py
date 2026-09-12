@@ -29,10 +29,18 @@ INTERVIEW_INTENT_PHRASES = (
     "can you", "could you", "tell me", "tell us", "walk me", "walk us", "take me",
 )
 
+# These phrases mean the answer depends on what is visually present. Keep this
+# deliberately narrower than general technical vocabulary so behavioral/conceptual
+# questions such as "tell me about yourself" stay on the fast text path.
 SCREEN_REFERENCE_TERMS = (
-    "this code", "this error", "this output", "this question", "on the screen", "shown here",
-    "shown on", "above code", "below code", "diagram", "screenshot", "visible", "fix this",
-    "solve this", "what is wrong here", "what's wrong here",
+    "this code", "this error", "this output", "this question", "this problem",
+    "this function", "this query", "this diagram", "this screenshot", "on the screen",
+    "shown here", "shown on", "above code", "below code", "visible", "fix this",
+    "solve this", "debug this", "read this", "look at this", "take a look",
+    "what is wrong here", "what's wrong here", "what will be the output",
+    "what is the output", "output of this", "which option", "choose the correct",
+    "multiple choice", "mcq", "coding problem", "problem statement", "given array",
+    "given string", "given matrix", "given linked list", "given tree",
 )
 
 CAMERA_REFERENCE_TERMS = (
@@ -52,14 +60,7 @@ def normalize_text(text: str) -> str:
 
 
 def is_substantive_question(text: str) -> bool:
-    """Detect answer-worthy interviewer turns from imperfect streaming ASR.
-
-    Streaming ASR often omits a trailing question mark or slightly damages the
-    first word of a question. Treat explicit questions, common interview
-    imperatives, technical/behavioral prompts, and sufficiently clear
-    second-person interrogatives as answer-worthy while filtering short
-    acknowledgements.
-    """
+    """Detect answer-worthy interviewer turns from imperfect streaming ASR."""
     clean = normalize_text(text)
     if len(clean) < 9 or ACK_ONLY.match(clean):
         return False
@@ -76,8 +77,6 @@ def is_substantive_question(text: str) -> bool:
     if any(term in lower for term in INTERVIEW_TASK_TERMS) and len(words) >= 3:
         return True
 
-    # Recover questions where ASR dropped/mangled the opening word but retained
-    # an interrogative later in the utterance, e.g. "for this role how would you...".
     interrogatives = {"what", "why", "how", "when", "where", "which", "who"}
     if len(words) >= 5 and interrogatives.intersection(words) and ({"you", "your"} & set(words)):
         return True
@@ -91,12 +90,7 @@ def should_attach_camera(text: str) -> bool:
 
 
 def should_attach_screen(text: str) -> bool:
-    """Return true when the existing overlay should attach visual context.
-
-    The overlay historically knows only a single ``latest_screen_bytes`` slot. The
-    real-time multimodal bridge publishes a labeled SCREEN+CAMERA composite there,
-    so camera-referential prompts use the same proven vision-request path.
-    """
+    """Return true only when the spoken/text prompt actually depends on visuals."""
     lower = normalize_text(text).lower()
     return any(term in lower for term in SCREEN_REFERENCE_TERMS) or any(
         term in lower for term in CAMERA_REFERENCE_TERMS
