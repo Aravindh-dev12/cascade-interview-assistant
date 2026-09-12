@@ -74,10 +74,7 @@ class OverlayWindow(QWidget):
             self.settings.get("system_device_idx", -1),
         )
         self.stt_worker = STTWorker(self.audio_recorder, api_key=self.get_effective_nvidia_key())
-        self.copilot_ai = CopilotAI(
-            model=self.settings.get("model", config.DEFAULT_GEMINI_MODEL),
-            api_key=self.get_effective_gemini_key(),
-        )
+        self.copilot_ai = CopilotAI(provider=self.settings.get("ai_provider", "hybrid"))
 
         self.drag_position = QPoint()
         self.hotkey_signaler = HotkeySignaler()
@@ -137,11 +134,11 @@ class OverlayWindow(QWidget):
             flags |= Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
 
-    def get_effective_gemini_key(self):
-        return os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
-
     def get_effective_nvidia_key(self):
         return os.environ.get("NVIDIA_API_KEY", "").strip()
+
+    def _configure_ai(self):
+        self.copilot_ai.set_config(provider=self.settings.get("ai_provider", "hybrid"))
 
     def setup_global_hotkeys(self):
         try:
@@ -230,7 +227,7 @@ class OverlayWindow(QWidget):
         header = QHBoxLayout()
         assistant_label = QLabel("ANSWER")
         assistant_label.setObjectName("eyebrow")
-        self.mode_label = QLabel(self.settings.get("model", config.DEFAULT_GEMINI_MODEL))
+        self.mode_label = QLabel(self.copilot_ai.runtime_label())
         self.mode_label.setObjectName("muted")
         header.addWidget(assistant_label)
         header.addStretch()
@@ -246,7 +243,7 @@ class OverlayWindow(QWidget):
         self.answer_display.setOpenExternalLinks(True)
         self.answer_display.setMarkdown(
             "### Ready\n\n"
-            "Practice mode can listen continuously, keep the latest screen context, and stream answers as soon as they arrive."
+            "Practice mode can listen continuously, keep the latest visual context, and stream NVIDIA/Qwen answers as soon as they arrive."
         )
         answer_layout.addWidget(self.answer_display)
         body_layout.addWidget(answer_card, stretch=5)
@@ -317,7 +314,7 @@ class OverlayWindow(QWidget):
     def update_ui_stylesheet(self):
         opacity = max(0.55, min(1.0, float(self.settings.get("window_opacity", 0.94))))
         alpha = int(opacity * 255)
-        font_size = int(self.settings.get("font_size", 13))
+        font_size = max(11, int(self.settings.get("font_size", 13)))
         self.setStyleSheet(f"""
             QWidget {{ font-family:'Segoe UI Variable Text','Segoe UI',Arial,sans-serif; color:#E8EEF8; font-size:13px; }}
             QFrame#container {{ background:rgba(7,11,18,{alpha}); border:1px solid rgba(71,85,105,150); border-radius:14px; }}
@@ -425,7 +422,11 @@ class OverlayWindow(QWidget):
             )
             return
         if not self.get_effective_nvidia_key():
-            QMessageBox.warning(self, "NVIDIA key missing", "Add NVIDIA_API_KEY to the project env file and restart the app.")
+            QMessageBox.warning(
+                self,
+                "NVIDIA key missing",
+                "Add NVIDIA_API_KEY to the project .env file and restart the app.",
+            )
             return
 
         self.audio_recorder.set_devices(
@@ -504,8 +505,6 @@ class OverlayWindow(QWidget):
         self.latest_screen_time = time.monotonic()
         self.screen_meta.setText("SCREEN CONTEXT LIVE")
 
-        # Continuous screen capture never competes with live listening. While listening,
-        # the latest frame is attached only when the spoken question refers to the screen.
         if self.audio_recorder.is_recording:
             return
         if not self.settings.get("auto_answer_screen", True):
@@ -543,12 +542,6 @@ class OverlayWindow(QWidget):
         self._set_status("ERROR")
         self.answer_display.setMarkdown(f"### Voice transcription unavailable\n\n`{message}`")
 
-    def _configure_gemini(self):
-        self.copilot_ai.set_config(
-            model=self.settings.get("model", config.DEFAULT_GEMINI_MODEL),
-            api_key=self.get_effective_gemini_key(),
-        )
-
     @Slot()
     def trigger_text_analysis(self):
         self._enqueue_ai(source="Current transcript", kind="chat", custom_query="Answer the latest practice question.")
@@ -561,7 +554,9 @@ class OverlayWindow(QWidget):
         self.prompt_input.clear()
         image = None
         now = time.monotonic()
-        if self.latest_screen_bytes and now - self.latest_screen_time <= float(self.settings.get("screen_context_max_age_seconds", 12.0)):
+        if self.latest_screen_bytes and now - self.latest_screen_time <= float(
+            self.settings.get("screen_context_max_age_seconds", 12.0)
+        ):
             image = self.latest_screen_bytes if should_attach_screen(query) else None
         self._enqueue_ai(
             source=f"Chat: *{query}*",
@@ -575,15 +570,11 @@ class OverlayWindow(QWidget):
         return {"speech": 0, "chat": 1, "manual_screen": 1, "screen": 3}.get(kind, 2)
 
     def _enqueue_ai(self, source, kind="chat", image_bytes=None, custom_query=None, use_image_history=False):
-        self._configure_gemini()
+        self._configure_ai()
         if not _practice_mode_enabled():
             self.answer_display.setMarkdown(
                 "### Practice mode is off\n\nSet `PRACTICE_MODE=1` only for permitted practice sessions."
             )
-            return
-        if not self.get_effective_gemini_key():
-            self.answer_display.setMarkdown("### Gemini key missing\n\nAdd `GEMINI_API_KEY` to the project env file.")
-            self._set_status("ERROR")
             return
 
         request_id = self.next_request_id
@@ -610,14 +601,11 @@ class OverlayWindow(QWidget):
 
         self.request_queue.append(request)
         self.request_queue.sort(key=lambda item: (item["priority"], item["created"]))
-        max_queue = 5
-        while len(self.request_queue) > max_queue:
+        while len(self.request_queue) > 5:
             self.request_queue.pop()
         self._drain_ai_queue()
 
     def _drain_ai_queue(self):
-        # Normally one request at a time. A speech request may run alongside a stale
-        # background screen request so visual work cannot break the speech latency target.
         while self.request_queue and len(self.workers) < 2:
             if len(self.workers) == 1:
                 only_active = next(iter(self.requests.values()))
@@ -721,7 +709,8 @@ class OverlayWindow(QWidget):
             self.audio_recorder.stop_recording()
 
         self.settings = dialog.settings.copy()
-        self.mode_label.setText(self.settings.get("model", config.DEFAULT_GEMINI_MODEL))
+        self._configure_ai()
+        self.mode_label.setText(self.copilot_ai.runtime_label())
         self.update_ui_stylesheet()
         self._apply_window_flags()
         self.show()
@@ -731,7 +720,6 @@ class OverlayWindow(QWidget):
             self.settings.get("mic_device_idx", -1),
             self.settings.get("system_device_idx", -1),
         )
-        self._configure_gemini()
         self.stt_worker.set_api_key(self.get_effective_nvidia_key())
         self._sync_screen_watcher(restart=True)
 
