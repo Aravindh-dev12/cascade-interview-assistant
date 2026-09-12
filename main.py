@@ -16,8 +16,6 @@ from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
 from utils.candidate_context import install_candidate_context
-from utils.inference_watchdog import install_inference_watchdog
-from utils.local_qwen_pipeline import install_local_qwen_pipeline
 from utils.mouse_passthrough import MousePassthroughController
 from utils.parakeet_runtime import install_parakeet_runtime
 from utils.realtime_multimodal import (
@@ -46,8 +44,6 @@ class TooltipBlocker(QObject):
 
 
 def _install_console_signal_handlers(app):
-    """Let Ctrl+C / console termination shut down the Qt event loop cleanly."""
-
     def request_quit(signum, _frame):
         print(f"\n[main] Console signal {signum} received; shutting down...")
         app.quit()
@@ -77,9 +73,7 @@ def main():
     install_settings_device_compat()
     install_audio_device_recovery()
     install_visual_autopilot()
-    install_inference_watchdog()
     install_candidate_context()
-    install_local_qwen_pipeline()
     install_parakeet_runtime()
 
     print(f"[env] project dir: {PROJECT_DIR}")
@@ -87,9 +81,10 @@ def main():
     print(f"[env] env exists: {env_status['exists']}")
     print(f"[env] detected names: {', '.join(env_status['detected_names']) or 'none'}")
     print(f"[env] NVIDIA_API_KEY loaded: {env_status['nvidia_loaded']}")
+    print(f"[env] GEMINI_API_KEY loaded: {env_status['gemini_loaded']}")
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
-    print("[env] AI_PROVIDER: ollama (forced final answer engine)")
-    print(f"[env] OLLAMA_MODEL: {os.environ.get('OLLAMA_MODEL', 'qwen3.5:4b')}")
+    print("[env] AI_PROVIDER: gemini (forced final answer engine)")
+    print("[env] GEMINI_MODEL: gemini-2.5-flash")
     print(
         f"[env] NVIDIA_VISION_MODEL: "
         f"{os.environ.get('NVIDIA_VISION_MODEL', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning')}"
@@ -101,7 +96,7 @@ def main():
     if not env_status["exists"]:
         print(
             "[env] WARNING: no project .env found. Copy .env.template to .env, "
-            "then set PRACTICE_MODE=1 and NVIDIA_API_KEY."
+            "then set PRACTICE_MODE=1, NVIDIA_API_KEY, and GEMINI_API_KEY."
         )
 
     window = OverlayWindow()
@@ -140,12 +135,12 @@ def main():
     window.activateWindow()
 
     print("[main] quntumnintent running in manual-first mode.")
-    print("Listen: starts Parakeet microphone + system-audio transcription.")
+    print("Listen: starts NVIDIA Parakeet microphone + system-audio transcription.")
     print("Stop: stops microphone + system-audio transcription.")
     print("Capture screen / Ctrl+Shift+S: captures one screenshot and answers it immediately.")
-    print("Send: answers the typed chat prompt using local Qwen.")
-    print("Answers: local Qwen 3.5/Ollama only.")
-    print("Vision: NVIDIA Nemotron Omni first; local Qwen vision fallback if NVIDIA is busy.")
+    print("Send: answers the typed chat prompt using Gemini 2.5 Flash.")
+    print("Answers: Google Gemini 2.5 Flash only; no Ollama/local model.")
+    print("Vision: NVIDIA Nemotron Omni first; direct Gemini image fallback if NVIDIA vision is unavailable.")
     print("No automatic listening and no background screenshot inference.")
     print("Candidate context: data/candidate_context.local.md (git-ignored local file).")
     print("Ctrl+Shift+A: toggle Listen/Stop.")
