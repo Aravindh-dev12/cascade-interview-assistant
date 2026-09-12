@@ -18,7 +18,8 @@ def install_inference_watchdog():
     The original hybrid router waited forever if a provider connected but never
     emitted its first token. Visual requests can also arrive immediately at
     startup while an Ollama warmup is still loading the model. This patch makes
-    warmup opt-in and gives every request a bounded first-token deadline.
+    warmup opt-in, clamps stalled Ollama sockets, and gives every hybrid request
+    a bounded first-token deadline.
     """
     from engine import copilot_ai as ai_module
 
@@ -28,6 +29,7 @@ def install_inference_watchdog():
         return
 
     original_warmup = OllamaClient.warmup
+    original_request = OllamaClient._request
 
     def warmup(client):
         enabled = os.environ.get("OLLAMA_WARMUP", "0").strip().lower() in {
@@ -38,9 +40,17 @@ def install_inference_watchdog():
             return False
         return original_warmup(client)
 
-    OllamaClient.warmup = warmup
+    def bounded_request(client, path, payload=None, timeout=2.0):
+        if path == "/api/chat" and payload and payload.get("stream"):
+            socket_timeout = _float_env(
+                "OLLAMA_STREAM_SOCKET_TIMEOUT_SECONDS", 35.0, 8.0, 120.0
+            )
+            timeout = min(float(timeout), socket_timeout)
+        return original_request(client, path, payload=payload, timeout=timeout)
 
-    @staticmethod
+    OllamaClient.warmup = warmup
+    OllamaClient._request = bounded_request
+
     def run_provider(name, factory, events):
         try:
             produced = False
@@ -179,6 +189,6 @@ def install_inference_watchdog():
                 print(f"[hybrid] {winner} stream ended after partial output: {payload}")
                 return
 
-    CopilotAI._run_provider = run_provider
+    CopilotAI._run_provider = staticmethod(run_provider)
     CopilotAI._hybrid_stream = hybrid_stream
     CopilotAI._inference_watchdog_installed = True
