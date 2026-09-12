@@ -15,6 +15,7 @@ env_status = load_project_env(PROJECT_DIR)
 from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
+from utils.candidate_context import install_candidate_context
 from utils.inference_watchdog import install_inference_watchdog
 from utils.mouse_passthrough import MousePassthroughController
 from utils.realtime_multimodal import (
@@ -75,6 +76,7 @@ def main():
     install_audio_device_recovery()
     install_visual_autopilot()
     install_inference_watchdog()
+    install_candidate_context()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -136,8 +138,9 @@ def main():
     print("[main] quntumnintent running.")
     print("AI: NVIDIA Kimi-K3 + local Qwen/Ollama only.")
     print("NVIDIA_API_KEY is loaded only from the project .env file.")
-    print("Visual autopilot: stable screen questions are analyzed automatically.")
-    print("Fresh screen/camera context is attached to substantive interviewer questions.")
+    print("Live screen context is cached while listening; only screen-dependent spoken prompts attach it.")
+    print("Manual Capture/Camera always force image analysis.")
+    print("Candidate context: data/candidate_context.local.md (git-ignored local file).")
     print("Inference watchdog: stalled providers cannot block later questions indefinitely.")
     print("Ctrl+Shift+S: capture screen and answer.")
     print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
