@@ -16,6 +16,7 @@ class QuestionDetectorTests(unittest.TestCase):
             )
         )
         self.assertTrue(is_substantive_question("How would you optimize this algorithm"))
+        self.assertTrue(is_substantive_question("Tell me about yourself"))
 
     def test_asr_without_question_punctuation(self):
         self.assertTrue(
@@ -45,12 +46,16 @@ class QuestionDetectorTests(unittest.TestCase):
 
     def test_screen_reference(self):
         self.assertTrue(should_attach_screen("Can you fix this code?"))
+        self.assertTrue(should_attach_screen("Please solve this coding problem"))
+        self.assertTrue(should_attach_screen("Which option is correct"))
+        self.assertTrue(should_attach_screen("What will be the output of this function"))
         self.assertFalse(should_attach_screen("What is dependency injection?"))
+        self.assertFalse(should_attach_screen("Tell me about yourself"))
+        self.assertFalse(should_attach_screen("Tell me about your last project"))
 
     def test_camera_reference(self):
         self.assertTrue(should_attach_camera("What am I holding in front of the camera?"))
         self.assertTrue(should_attach_camera("Look at this object"))
-        # Camera prompts intentionally also use the overlay's existing visual slot.
         self.assertTrue(should_attach_screen("What do you see on the camera?"))
         self.assertFalse(should_attach_camera("Explain dependency injection"))
 
