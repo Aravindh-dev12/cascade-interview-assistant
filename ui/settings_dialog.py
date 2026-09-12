@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -24,12 +23,6 @@ from engine.audio_recorder import AudioRecorder
 from ui.region_selector import RegionSelector
 from utils.camera_device_monitor import camera_device_id
 
-LOCAL_MODELS = (
-    "qwen3.5:4b",
-    "gemma4:e4b",
-    "oamazonasgabriel/lfm2.5-2.6b:q4_k_m-8gbGPU",
-)
-
 
 class SettingsDialog(QDialog):
     def __init__(self, current_settings, parent=None):
@@ -37,8 +30,8 @@ class SettingsDialog(QDialog):
         self.settings = current_settings.copy()
         self.selector = None
         self.setWindowTitle("quntumnintent settings")
-        self.setMinimumSize(620, 700)
-        self.resize(700, 790)
+        self.setMinimumSize(620, 680)
+        self.resize(700, 760)
         self._apply_style()
         self._build_ui()
         self._load_devices()
@@ -50,7 +43,7 @@ class SettingsDialog(QDialog):
             QLabel#title { color:white; font-size:20px; font-weight:700; }
             QLabel#muted { color:#75859B; font-size:11px; }
             QFrame#card { background:#0C1420; border:1px solid #1F2C3E; border-radius:10px; }
-            QComboBox, QSpinBox, QLineEdit { min-height:34px; background:#111B2A; color:#F8FAFC; border:1px solid #2A3A50; border-radius:7px; padding:0 8px; }
+            QComboBox, QSpinBox { min-height:34px; background:#111B2A; color:#F8FAFC; border:1px solid #2A3A50; border-radius:7px; padding:0 8px; }
             QCheckBox { color:#CAD5E3; spacing:8px; }
             QSlider::groove:horizontal { height:4px; background:#2A3A50; border-radius:2px; }
             QSlider::sub-page:horizontal { background:#3B82F6; }
@@ -60,9 +53,6 @@ class SettingsDialog(QDialog):
             QPushButton#secondary { background:transparent; color:#B8C5D6; border:1px solid #334155; }
             QScrollArea { border:none; background:transparent; }
             QScrollArea > QWidget > QWidget { background:transparent; }
-            QScrollBar:vertical { background:transparent; width:7px; }
-            QScrollBar::handle:vertical { background:#334155; border-radius:3px; min-height:28px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
             QToolTip { background:transparent; color:transparent; border:none; }
         """)
 
@@ -85,17 +75,14 @@ class SettingsDialog(QDialog):
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
 
         header = QWidget()
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(20, 18, 20, 10)
-        header_layout.setSpacing(4)
         title = QLabel("Assistant settings")
         title.setObjectName("title")
         subtitle = QLabel(
-            "NVIDIA Kimi-K3 and local Qwen are the only answer engines. "
-            "NVIDIA_API_KEY is loaded automatically from the project .env file."
+            "Google Gemini 2.5 Flash is the only answer engine. NVIDIA Parakeet handles speech-to-text and NVIDIA Nemotron handles first-pass screen/camera extraction."
         )
         subtitle.setObjectName("muted")
         subtitle.setWordWrap(True)
@@ -113,59 +100,46 @@ class SettingsDialog(QDialog):
 
         ai_card, ai_layout = self._card(
             "AI runtime",
-            "Hybrid gives Kimi-K3 a short head start and races local Qwen when cloud latency is high. No API key is stored in Settings.",
+            "Cloud-only runtime. No Ollama or local model is used. API keys stay in the project .env file and are never stored in Settings.",
         )
         ai_form = QFormLayout()
         self.provider_combo = QComboBox()
-        self.provider_combo.addItem("Hybrid · Kimi K3 + local Qwen", "hybrid")
-        self.provider_combo.addItem("NVIDIA Kimi K3 only", "nvidia")
-        self.provider_combo.addItem("Local Qwen/Ollama only", "ollama")
-        provider_idx = self.provider_combo.findData(self.settings.get("ai_provider", "hybrid"))
-        self.provider_combo.setCurrentIndex(provider_idx if provider_idx >= 0 else 0)
-
-        self.local_model_combo = QComboBox()
-        self.local_model_combo.setEditable(True)
-        self.local_model_combo.addItems(LOCAL_MODELS)
-        self.local_model_combo.setCurrentText(self.settings.get("local_model", config.DEFAULT_LOCAL_MODEL))
-
-        self.ollama_url_edit = QLineEdit(
-            self.settings.get("ollama_base_url", config.DEFAULT_OLLAMA_BASE_URL)
-        )
-        self.ollama_ctx_spin = QSpinBox()
-        self.ollama_ctx_spin.setRange(2048, 65536)
-        self.ollama_ctx_spin.setSingleStep(2048)
-        self.ollama_ctx_spin.setValue(int(self.settings.get("ollama_num_ctx", 8192)))
-
-        ai_form.addRow("Provider", self.provider_combo)
-        ai_form.addRow("Local model", self.local_model_combo)
-        ai_form.addRow("Ollama URL", self.ollama_url_edit)
-        ai_form.addRow("Local context", self.ollama_ctx_spin)
+        self.provider_combo.addItem("Google Gemini 2.5 Flash only", "gemini")
+        self.provider_combo.setEnabled(False)
+        self.model_combo = QComboBox()
+        self.model_combo.addItem(config.DEFAULT_GEMINI_MODEL, config.DEFAULT_GEMINI_MODEL)
+        self.model_combo.setEnabled(False)
+        ai_form.addRow("Answer engine", self.provider_combo)
+        ai_form.addRow("Model", self.model_combo)
         ai_layout.addLayout(ai_form)
 
-        key_status = QLabel(
+        nvidia_status = QLabel(
             "NVIDIA_API_KEY: loaded from .env"
             if os.environ.get("NVIDIA_API_KEY", "").strip()
             else "NVIDIA_API_KEY: missing from .env"
         )
-        key_status.setObjectName("muted")
-        ai_layout.addWidget(key_status)
-
-        local_note = QLabel(
-            "Local fallback: install Ollama and run  ollama pull qwen3.5:4b. "
-            "The app keeps Qwen warm and streams the first available answer."
+        nvidia_status.setObjectName("muted")
+        gemini_status = QLabel(
+            "GEMINI_API_KEY: loaded from .env"
+            if (
+                os.environ.get("GEMINI_API_KEY", "").strip()
+                or os.environ.get("GOOGLE_API_KEY", "").strip()
+            )
+            else "GEMINI_API_KEY: missing from .env"
         )
-        local_note.setObjectName("muted")
-        local_note.setWordWrap(True)
-        ai_layout.addWidget(local_note)
+        gemini_status.setObjectName("muted")
+        ai_layout.addWidget(nvidia_status)
+        ai_layout.addWidget(gemini_status)
         content_layout.addWidget(ai_card)
 
         voice_card, voice_layout = self._card(
             "Live voice",
-            "NVIDIA Riva/Nemotron uses the same NVIDIA_API_KEY from .env for streaming transcription.",
+            "Listen captures microphone + system audio. NVIDIA Parakeet transcribes English speech; Gemini 2.5 Flash generates the final answer.",
         )
-        self.auto_start_check = QCheckBox("Start listening automatically")
-        self.auto_start_check.setChecked(self.settings.get("auto_start_listening", True))
-        self.auto_answer_check = QCheckBox("Answer substantive interviewer questions automatically")
+        self.auto_start_check = QCheckBox("Listening starts only when I click Listen")
+        self.auto_start_check.setChecked(False)
+        self.auto_start_check.setEnabled(False)
+        self.auto_answer_check = QCheckBox("Answer substantive interviewer questions while listening")
         self.auto_answer_check.setChecked(self.settings.get("auto_answer_speech", True))
         self.auto_audio_check = QCheckBox("Auto-detect microphone and system-audio changes")
         self.auto_audio_check.setChecked(self.settings.get("auto_detect_audio_devices", True))
@@ -185,8 +159,8 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(voice_card)
 
         camera_card, camera_layout = self._card(
-            "Camera devices",
-            "The selected camera is captured live in practice mode. The latest compressed frame is kept locally and attached only when visual context is needed.",
+            "Camera",
+            "Camera analysis is manual. The latest frame is sent through NVIDIA visual extraction, then Gemini answers it; Gemini receives the image directly if NVIDIA vision is unavailable.",
         )
         camera_form = QFormLayout()
         self.camera_combo = QComboBox()
@@ -201,33 +175,30 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(camera_card)
 
         screen_card, screen_layout = self._card(
-            "Real-time screen context",
-            "The watcher captures locally and emits a frame after a meaningful visual change becomes stable. While listening, it updates context without competing with speech transcription.",
+            "Manual screen capture",
+            "No background screen inference. Click Capture screen or press Ctrl+Shift+S when you want one screenshot analyzed.",
         )
-        self.screen_watch_check = QCheckBox("Continuously watch the selected screen/region")
-        self.screen_watch_check.setChecked(self.settings.get("auto_screen_watch", True))
-        self.screen_answer_check = QCheckBox("Automatically answer stable screen-only questions when not listening")
-        self.screen_answer_check.setChecked(self.settings.get("auto_answer_screen", True))
-        self.include_screen_check = QCheckBox("Attach recent visual context when speech refers to visible code/error/question")
-        self.include_screen_check.setChecked(self.settings.get("include_screen_with_speech", True))
+        self.screen_watch_check = QCheckBox("Background screen watching disabled")
+        self.screen_watch_check.setChecked(False)
+        self.screen_watch_check.setEnabled(False)
+        self.screen_answer_check = QCheckBox("Automatic screen answering disabled")
+        self.screen_answer_check.setChecked(False)
+        self.screen_answer_check.setEnabled(False)
+        self.include_screen_check = QCheckBox("Voice does not attach screenshots automatically")
+        self.include_screen_check.setChecked(False)
+        self.include_screen_check.setEnabled(False)
         screen_layout.addWidget(self.screen_watch_check)
         screen_layout.addWidget(self.screen_answer_check)
         screen_layout.addWidget(self.include_screen_check)
 
-        screen_form = QFormLayout()
         self.screen_interval_spin = QSpinBox()
         self.screen_interval_spin.setRange(300, 3000)
-        self.screen_interval_spin.setSingleStep(50)
-        self.screen_interval_spin.setSuffix(" ms")
         self.screen_interval_spin.setValue(int(self.settings.get("screen_watch_interval_ms", 650)))
+        self.screen_interval_spin.hide()
         self.screen_stable_spin = QSpinBox()
         self.screen_stable_spin.setRange(200, 2000)
-        self.screen_stable_spin.setSingleStep(50)
-        self.screen_stable_spin.setSuffix(" ms")
         self.screen_stable_spin.setValue(int(self.settings.get("screen_stable_ms", 450)))
-        screen_form.addRow("Capture interval", self.screen_interval_spin)
-        screen_form.addRow("Stable before use", self.screen_stable_spin)
-        screen_layout.addLayout(screen_form)
+        self.screen_stable_spin.hide()
 
         region_row = QHBoxLayout()
         self.region_label = QLabel()
@@ -245,17 +216,13 @@ class SettingsDialog(QDialog):
         screen_layout.addLayout(region_row)
         content_layout.addWidget(screen_card)
 
-        overlay_card, overlay_layout = self._card(
-            "Overlay",
-            "Screen-capture exclusion is off by default. Hover tooltips are disabled globally so scrolling/hovering never covers the form.",
-        )
+        overlay_card, overlay_layout = self._card("Overlay")
         self.invisible_check = QCheckBox("Exclude overlay from supported Windows capture APIs")
         self.invisible_check.setChecked(self.settings.get("invisible_mode", False))
         self.always_on_top_check = QCheckBox("Keep overlay always on top")
         self.always_on_top_check.setChecked(self.settings.get("always_on_top", True))
         overlay_layout.addWidget(self.invisible_check)
         overlay_layout.addWidget(self.always_on_top_check)
-
         overlay_form = QFormLayout()
         self.opacity_slider = QSlider(Qt.Horizontal)
         self.opacity_slider.setRange(55, 100)
@@ -307,8 +274,7 @@ class SettingsDialog(QDialog):
         try:
             for camera in QMediaDevices.videoInputs():
                 cid = camera_device_id(camera)
-                name = camera.description() or "Camera"
-                self.camera_combo.addItem(name, cid)
+                self.camera_combo.addItem(camera.description() or "Camera", cid)
         except Exception as exc:
             print(f"[settings] Camera enumeration failed: {exc}")
         camera_idx = self.camera_combo.findData(self.settings.get("camera_device_id", ""))
@@ -317,7 +283,7 @@ class SettingsDialog(QDialog):
     def _update_region_label(self):
         region = self.settings.get("capture_region")
         if not region:
-            self.region_label.setText("Watching the monitor containing the overlay")
+            self.region_label.setText("Capture target: monitor")
         else:
             self.region_label.setText(
                 f"Region {region.get('width', 0)}×{region.get('height', 0)} at ({region.get('left', 0)}, {region.get('top', 0)})"
@@ -355,11 +321,9 @@ class SettingsDialog(QDialog):
         self._update_region_label()
 
     def _save(self):
-        self.settings["ai_provider"] = self.provider_combo.currentData()
-        self.settings["local_model"] = self.local_model_combo.currentText().strip() or config.DEFAULT_LOCAL_MODEL
-        self.settings["ollama_base_url"] = self.ollama_url_edit.text().strip() or config.DEFAULT_OLLAMA_BASE_URL
-        self.settings["ollama_num_ctx"] = self.ollama_ctx_spin.value()
-        self.settings["auto_start_listening"] = self.auto_start_check.isChecked()
+        self.settings["ai_provider"] = "gemini"
+        self.settings["model"] = config.DEFAULT_GEMINI_MODEL
+        self.settings["auto_start_listening"] = False
         self.settings["auto_answer_speech"] = self.auto_answer_check.isChecked()
         self.settings["auto_detect_audio_devices"] = self.auto_audio_check.isChecked()
         self.settings["auto_switch_new_microphone"] = self.auto_switch_mic_check.isChecked()
@@ -368,9 +332,9 @@ class SettingsDialog(QDialog):
         self.settings["camera_device_id"] = self.camera_combo.currentData() or ""
         self.settings["auto_detect_camera_devices"] = self.auto_camera_check.isChecked()
         self.settings["auto_switch_new_camera"] = self.auto_switch_camera_check.isChecked()
-        self.settings["auto_screen_watch"] = self.screen_watch_check.isChecked()
-        self.settings["auto_answer_screen"] = self.screen_answer_check.isChecked()
-        self.settings["include_screen_with_speech"] = self.include_screen_check.isChecked()
+        self.settings["auto_screen_watch"] = False
+        self.settings["auto_answer_screen"] = False
+        self.settings["include_screen_with_speech"] = False
         self.settings["screen_watch_interval_ms"] = self.screen_interval_spin.value()
         self.settings["screen_stable_ms"] = self.screen_stable_spin.value()
         self.settings["invisible_mode"] = self.invisible_check.isChecked()
