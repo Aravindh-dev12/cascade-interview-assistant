@@ -74,7 +74,7 @@ class OverlayWindow(QWidget):
             self.settings.get("system_device_idx", -1),
         )
         self.stt_worker = STTWorker(self.audio_recorder, api_key=self.get_effective_nvidia_key())
-        self.copilot_ai = CopilotAI(provider=self.settings.get("ai_provider", "hybrid"))
+        self.copilot_ai = CopilotAI(provider=self.settings.get("ai_provider", "gemini"))
 
         self.drag_position = QPoint()
         self.hotkey_signaler = HotkeySignaler()
@@ -97,8 +97,8 @@ class OverlayWindow(QWidget):
 
         self._apply_window_flags()
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setMinimumSize(430, 520)
-        self.resize(510, 730)
+        self.setMinimumSize(470, 520)
+        self.resize(560, 750)
         self.init_ui()
         self.setup_global_hotkeys()
 
@@ -138,7 +138,7 @@ class OverlayWindow(QWidget):
         return os.environ.get("NVIDIA_API_KEY", "").strip()
 
     def _configure_ai(self):
-        self.copilot_ai.set_config(provider=self.settings.get("ai_provider", "hybrid"))
+        self.copilot_ai.set_config(provider=self.settings.get("ai_provider", "gemini"))
 
     def setup_global_hotkeys(self):
         try:
@@ -243,7 +243,7 @@ class OverlayWindow(QWidget):
         self.answer_display.setOpenExternalLinks(True)
         self.answer_display.setMarkdown(
             "### Ready\n\n"
-            "Practice mode can listen continuously, keep the latest visual context, and stream NVIDIA/Qwen answers as soon as they arrive."
+            "Click Listen for NVIDIA Parakeet transcription, Capture screen for visual questions, or Send to ask Gemini 2.5 Flash."
         )
         answer_layout.addWidget(self.answer_display)
         body_layout.addWidget(answer_card, stretch=5)
@@ -269,9 +269,23 @@ class OverlayWindow(QWidget):
         self.partial_transcript_label.hide()
         self.transcript_display = QTextBrowser()
         self.transcript_display.setObjectName("transcriptDisplay")
-        self.transcript_display.setText("Listening starts automatically when practice mode is enabled.")
+        self.transcript_display.setText("Click Listen to start NVIDIA Parakeet transcription.")
         transcript_layout.addWidget(self.partial_transcript_label)
         transcript_layout.addWidget(self.transcript_display)
+
+        transcript_actions = QHBoxLayout()
+        transcript_actions.setContentsMargins(0, 0, 0, 0)
+        transcript_actions.setSpacing(7)
+        transcript_hint = QLabel("Send the current transcript to Gemini")
+        transcript_hint.setObjectName("muted")
+        self.transcript_send_btn = QPushButton("Send")
+        self.transcript_send_btn.setObjectName("primaryButton")
+        self.transcript_send_btn.setFixedWidth(76)
+        self.transcript_send_btn.clicked.connect(self.trigger_text_analysis)
+        transcript_actions.addWidget(transcript_hint)
+        transcript_actions.addStretch()
+        transcript_actions.addWidget(self.transcript_send_btn)
+        transcript_layout.addLayout(transcript_actions)
         body_layout.addWidget(transcript_card, stretch=2)
 
         composer = QFrame()
@@ -461,6 +475,7 @@ class OverlayWindow(QWidget):
         if self.transcript_display.toPlainText() in {
             "Listening for speech…",
             "Listening starts automatically when practice mode is enabled.",
+            "Click Listen to start NVIDIA Parakeet transcription.",
         }:
             self.transcript_display.clear()
         color = "#60A5FA" if speaker == "Candidate" else "#FBBF24"
@@ -544,7 +559,24 @@ class OverlayWindow(QWidget):
 
     @Slot()
     def trigger_text_analysis(self):
-        self._enqueue_ai(source="Current transcript", kind="chat", custom_query="Answer the latest practice question.")
+        if not self.copilot_ai.transcript_history:
+            self.answer_display.setMarkdown(
+                "### Current transcript\n\nNo finalized transcript is available yet. Click Listen and wait for a spoken line to appear first."
+            )
+            return
+        print(
+            f"[transcript] Manual Send -> Gemini · lines={len(self.copilot_ai.transcript_history)}"
+        )
+        self._enqueue_ai(
+            source="Current transcript",
+            kind="chat",
+            custom_query=(
+                "Answer the latest substantive practice question from the live transcript now. "
+                "Use the preceding transcript lines when the latest question depends on earlier context. "
+                "For coding questions give the requested-language solution, explanation, complexity, and key edge cases. "
+                "For MCQs put the correct option first with a concise reason."
+            ),
+        )
 
     @Slot()
     def send_custom_query(self):
