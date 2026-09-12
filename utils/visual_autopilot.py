@@ -10,12 +10,11 @@ def _env_enabled(name, default=True):
 
 
 def install_visual_autopilot():
-    """Turn every meaningful captured screen into an immediate practice answer.
+    """Route captured visual context into practice answers.
 
-    ScreenWatcher filters ordinary motion and emits the first usable frame plus stable
-    meaningful changes. Every emitted frame is eligible for one vision request whether
-    audio listening is on or off. The overlay queue keeps only the newest pending
-    automatic screen request, so slow visual inference cannot create an unbounded backlog.
+    The current runtime is manual-first, so automatic screen watching is disabled by
+    config. This compatibility layer still owns the manual Capture path and ensures
+    repeated clicks keep only the newest waiting screenshot instead of building a queue.
     """
     from ui import overlay_window as overlay_module
     from ui.settings_dialog import SettingsDialog
@@ -30,11 +29,12 @@ def install_visual_autopilot():
     original_analyze_camera = CameraVisionControls.analyze_camera
     original_settings_init = SettingsDialog.__init__
 
-    def _supersede_auto_screen_requests(window):
-        # Keep the newest pending stable frame only. An active request may finish,
-        # while this latest frame waits behind it and replaces older queued frames.
+    def _drop_queued_screen_requests(window, include_manual=False):
+        kinds = {"screen"}
+        if include_manual:
+            kinds.add("manual_screen")
         window.request_queue = [
-            item for item in window.request_queue if item.get("kind") != "screen"
+            item for item in window.request_queue if item.get("kind") not in kinds
         ]
 
     def handle_transcription(window, speaker, text):
@@ -77,7 +77,7 @@ def install_visual_autopilot():
             return
         window.last_screen_answer_time = now
 
-        _supersede_auto_screen_requests(window)
+        _drop_queued_screen_requests(window)
         mode = "while listening" if window.audio_recorder.is_recording else "screen-only"
         print(
             f"[vision] Captured stable screen -> analyze now · {mode} · "
@@ -105,7 +105,20 @@ def install_visual_autopilot():
     def submit_screen_capture(window, image_bytes, source="Manual screen capture"):
         window.latest_screen_bytes = image_bytes
         window.latest_screen_time = time.monotonic()
-        _supersede_auto_screen_requests(window)
+
+        # A manual capture is user intent. Remove older waiting screen/manual-screen
+        # requests so one slow request cannot cause several stale HackerRank captures
+        # to execute later. The active worker may finish; only the newest waiting frame remains.
+        active_manual = any(
+            request.get("kind") == "manual_screen"
+            for request in window.requests.values()
+        )
+        _drop_queued_screen_requests(window, include_manual=True)
+        if active_manual:
+            print(
+                "[vision] A screenshot is already being analyzed; keeping this as the newest queued capture."
+            )
+
         print(f"[vision] Manual screen capture -> analyze now · bytes={len(image_bytes)}")
         window._enqueue_ai(
             source=source,
@@ -130,7 +143,7 @@ def install_visual_autopilot():
 
     def analyze_camera(controller):
         if controller.latest_camera_bytes:
-            _supersede_auto_screen_requests(controller.window)
+            _drop_queued_screen_requests(controller.window, include_manual=True)
             print(
                 f"[vision] Camera frame -> analyze now · bytes={len(controller.latest_camera_bytes)}"
             )
