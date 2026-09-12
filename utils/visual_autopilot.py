@@ -19,6 +19,8 @@ def install_visual_autopilot():
     queue/scheduling while making visual context proactive and observable.
     """
     from ui import overlay_window as overlay_module
+    from ui.settings_dialog import SettingsDialog
+    from utils.realtime_multimodal import CameraVisionControls
 
     OverlayWindow = overlay_module.OverlayWindow
     if getattr(OverlayWindow, "_visual_autopilot_installed", False):
@@ -26,6 +28,9 @@ def install_visual_autopilot():
 
     original_should_attach = overlay_module.should_attach_screen
     original_handle_transcription = OverlayWindow.handle_transcription
+    original_camera_init = CameraVisionControls.__init__
+    original_analyze_camera = CameraVisionControls.analyze_camera
+    original_settings_init = SettingsDialog.__init__
 
     def should_attach_visual(text):
         if _env_enabled("ALWAYS_ATTACH_FRESH_VISUAL", True):
@@ -111,7 +116,38 @@ def install_visual_autopilot():
             use_image_history=True,
         )
 
+    def camera_init(controller, window):
+        original_camera_init(controller, window)
+        # Recover a screen frame that may have been emitted just before the camera
+        # bridge connected during startup, so later camera frames create SCREEN+CAMERA
+        # context instead of accidentally replacing the visible screen with camera-only.
+        if window.latest_screen_bytes and not controller.latest_screen_bytes:
+            controller.latest_screen_bytes = window.latest_screen_bytes
+            controller.latest_screen_time = window.latest_screen_time
+            controller._publish_combined_context()
+
+    def analyze_camera(controller):
+        if controller.latest_camera_bytes:
+            print(
+                f"[vision] Camera frame -> AI · bytes={len(controller.latest_camera_bytes)}"
+            )
+        return original_analyze_camera(controller)
+
+    def settings_init(dialog, current_settings, parent=None):
+        original_settings_init(dialog, current_settings, parent)
+        if hasattr(dialog, "screen_answer_check"):
+            dialog.screen_answer_check.setText(
+                "Automatically analyze stable visible questions, including while listening"
+            )
+        if hasattr(dialog, "include_screen_check"):
+            dialog.include_screen_check.setText(
+                "Attach fresh screen/camera context to substantive interviewer questions"
+            )
+
     OverlayWindow.handle_transcription = handle_transcription
     OverlayWindow.handle_screen_frame = handle_screen_frame
     OverlayWindow.submit_screen_capture = submit_screen_capture
+    CameraVisionControls.__init__ = camera_init
+    CameraVisionControls.analyze_camera = analyze_camera
+    SettingsDialog.__init__ = settings_init
     OverlayWindow._visual_autopilot_installed = True
