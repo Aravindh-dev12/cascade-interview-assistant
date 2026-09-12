@@ -12,11 +12,10 @@ def _env_enabled(name, default=True):
 def install_visual_autopilot():
     """Turn every meaningful captured screen into an immediate practice answer.
 
-    ScreenWatcher already filters ordinary motion and emits only the first usable frame
-    plus stable meaningful changes. Every emitted frame is therefore eligible for one
-    vision request, even while audio listening is active. The overlay queue keeps only
-    the newest pending automatic screen request, so a slow visual request cannot build
-    an unbounded backlog.
+    ScreenWatcher filters ordinary motion and emits the first usable frame plus stable
+    meaningful changes. Every emitted frame is eligible for one vision request whether
+    audio listening is on or off. The overlay queue keeps only the newest pending
+    automatic screen request, so slow visual inference cannot create an unbounded backlog.
     """
     from ui import overlay_window as overlay_module
     from ui.settings_dialog import SettingsDialog
@@ -32,8 +31,8 @@ def install_visual_autopilot():
     original_settings_init = SettingsDialog.__init__
 
     def _supersede_auto_screen_requests(window):
-        # Keep the latest pending stable frame only. Active work is allowed to finish,
-        # while a newer captured frame waits behind it and replaces any older queued one.
+        # Keep the newest pending stable frame only. An active request may finish,
+        # while this latest frame waits behind it and replaces older queued frames.
         window.request_queue = [
             item for item in window.request_queue if item.get("kind") != "screen"
         ]
@@ -67,13 +66,6 @@ def install_visual_autopilot():
         if not window.settings.get("auto_answer_screen", True):
             return
         if not overlay_module._practice_mode_enabled():
-            return
-
-        # The requested behavior is capture -> answer even while the microphone and
-        # system-audio listener are running. AUTO_VISUAL_WHILE_LISTENING defaults on.
-        if window.audio_recorder.is_recording and not _env_enabled(
-            "AUTO_VISUAL_WHILE_LISTENING", True
-        ):
             return
 
         now = time.monotonic()
@@ -148,7 +140,7 @@ def install_visual_autopilot():
         original_settings_init(dialog, current_settings, parent)
         if hasattr(dialog, "screen_answer_check"):
             dialog.screen_answer_check.setText(
-                "Immediately answer stable screen questions, including while listening"
+                "Immediately answer every stable visible practice question"
             )
         if hasattr(dialog, "include_screen_check"):
             dialog.include_screen_check.setText(
