@@ -13,14 +13,7 @@ def _float_env(name, default, minimum, maximum):
 
 
 def install_inference_watchdog():
-    """Prevent a stalled Kimi/Qwen request from blocking the desktop answer queue.
-
-    The original hybrid router waited forever if a provider connected but never
-    emitted its first token. Visual requests can also arrive immediately at
-    startup while an Ollama warmup is still loading the model. This patch makes
-    warmup opt-in, clamps stalled Ollama sockets, and gives every hybrid request
-    a bounded first-token deadline.
-    """
+    """Bound provider stalls and avoid repeatedly hitting a rate-limited Kimi API."""
     from engine import copilot_ai as ai_module
 
     CopilotAI = ai_module.CopilotAI
@@ -43,7 +36,7 @@ def install_inference_watchdog():
     def bounded_request(client, path, payload=None, timeout=2.0):
         if path == "/api/chat" and payload and payload.get("stream"):
             socket_timeout = _float_env(
-                "OLLAMA_STREAM_SOCKET_TIMEOUT_SECONDS", 35.0, 8.0, 120.0
+                "OLLAMA_STREAM_SOCKET_TIMEOUT_SECONDS", 60.0, 10.0, 180.0
             )
             timeout = min(float(timeout), socket_timeout)
         return original_request(client, path, payload=payload, timeout=timeout)
@@ -65,21 +58,16 @@ def install_inference_watchdog():
 
     def hybrid_stream(ai, prompt, max_tokens, image_bytes_list=None):
         visual = bool(image_bytes_list)
-        if not ai.kimi.available():
-            yield from ai._qwen_stream(prompt, max_tokens, image_bytes_list)
-            return
-
         started = time.monotonic()
         events = queue.Queue()
         errors = {}
         done = set()
         winner = None
-        qwen_started = False
 
         if visual:
             hedge_seconds = _float_env("HYBRID_VISION_HEDGE_SECONDS", 0.15, 0.0, 4.0)
             first_token_timeout = _float_env(
-                "VISION_FIRST_TOKEN_TIMEOUT_SECONDS", 25.0, 4.0, 90.0
+                "VISION_FIRST_TOKEN_TIMEOUT_SECONDS", 45.0, 5.0, 120.0
             )
         else:
             hedge_seconds = _float_env("HYBRID_HEDGE_SECONDS", 1.25, 0.0, 4.0)
@@ -87,8 +75,14 @@ def install_inference_watchdog():
                 "TEXT_FIRST_TOKEN_TIMEOUT_SECONDS", 15.0, 3.0, 60.0
             )
         stream_idle_timeout = _float_env(
-            "PROVIDER_STREAM_IDLE_TIMEOUT_SECONDS", 30.0, 5.0, 120.0
+            "PROVIDER_STREAM_IDLE_TIMEOUT_SECONDS", 45.0, 5.0, 180.0
         )
+
+        now = time.monotonic()
+        kimi_available = ai.kimi.available()
+        kimi_backoff_until = float(getattr(ai, "_kimi_backoff_until", 0.0) or 0.0)
+        kimi_started = bool(kimi_available and now >= kimi_backoff_until)
+        qwen_started = not kimi_started
 
         total_image_bytes = sum(len(item) for item in (image_bytes_list or []) if item)
         print(
@@ -97,17 +91,32 @@ def install_inference_watchdog():
             f"first-token deadline={first_token_timeout:.1f}s"
         )
 
-        threading.Thread(
-            target=run_provider,
-            args=("kimi", lambda: ai._kimi_stream(prompt, max_tokens, image_bytes_list), events),
-            daemon=True,
-            name="hybrid-kimi",
-        ).start()
+        if kimi_started:
+            threading.Thread(
+                target=run_provider,
+                args=("kimi", lambda: ai._kimi_stream(prompt, max_tokens, image_bytes_list), events),
+                daemon=True,
+                name="hybrid-kimi",
+            ).start()
+        else:
+            if kimi_available and kimi_backoff_until > now:
+                print(
+                    f"[hybrid] Kimi temporarily backed off for "
+                    f"{kimi_backoff_until - now:.1f}s after rate limiting; using Qwen."
+                )
+            else:
+                print("[hybrid] Kimi unavailable; using local Qwen.")
+            threading.Thread(
+                target=run_provider,
+                args=("qwen", lambda: ai._qwen_stream(prompt, max_tokens, image_bytes_list), events),
+                daemon=True,
+                name="hybrid-qwen",
+            ).start()
 
         deadline = started + first_token_timeout
         while winner is None:
             elapsed = time.monotonic() - started
-            if not qwen_started and elapsed >= hedge_seconds:
+            if kimi_started and not qwen_started and elapsed >= hedge_seconds:
                 qwen_started = True
                 print("[hybrid] Starting local Qwen hedge.")
                 threading.Thread(
@@ -120,7 +129,7 @@ def install_inference_watchdog():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 pending = []
-                if "kimi" not in errors and "kimi" not in done:
+                if kimi_started and "kimi" not in errors and "kimi" not in done:
                     pending.append("Kimi: no first token")
                 if qwen_started and "qwen" not in errors and "qwen" not in done:
                     pending.append("Qwen: no first token")
@@ -145,26 +154,36 @@ def install_inference_watchdog():
                 )
                 yield payload
                 break
+
             if event_type == "error":
                 errors[name] = payload
                 print(f"[hybrid] {name} failed before first token: {payload}")
-                if name == "kimi" and not qwen_started:
-                    qwen_started = True
-                    print("[hybrid] Kimi failed; starting local Qwen immediately.")
-                    threading.Thread(
-                        target=run_provider,
-                        args=("qwen", lambda: ai._qwen_stream(prompt, max_tokens, image_bytes_list), events),
-                        daemon=True,
-                        name="hybrid-qwen",
-                    ).start()
+                if name == "kimi":
+                    if "429" in str(payload) or "too many requests" in str(payload).lower():
+                        cooldown = _float_env("NVIDIA_KIMI_429_BACKOFF_SECONDS", 60.0, 10.0, 600.0)
+                        ai._kimi_backoff_until = time.monotonic() + cooldown
+                        print(f"[hybrid] Kimi rate-limit backoff enabled for {cooldown:.0f}s.")
+                    if not qwen_started:
+                        qwen_started = True
+                        print("[hybrid] Kimi failed; starting local Qwen immediately.")
+                        threading.Thread(
+                            target=run_provider,
+                            args=("qwen", lambda: ai._qwen_stream(prompt, max_tokens, image_bytes_list), events),
+                            daemon=True,
+                            name="hybrid-qwen",
+                        ).start()
             elif event_type == "done":
                 done.add(name)
                 if payload:
                     errors[name] = RuntimeError(str(payload))
 
-            expected = {"kimi", "qwen"} if qwen_started else {"kimi"}
+            expected = set()
+            if kimi_started:
+                expected.add("kimi")
+            if qwen_started:
+                expected.add("qwen")
             finished = set(errors) | done
-            if expected.issubset(finished) and winner is None:
+            if expected and expected.issubset(finished) and winner is None:
                 details = "; ".join(
                     f"{name}: {errors.get(name, 'no answer tokens')}" for name in sorted(expected)
                 )
