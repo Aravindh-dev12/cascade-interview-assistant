@@ -35,9 +35,26 @@ def install_inference_watchdog():
 
     def bounded_request(client, path, payload=None, timeout=2.0):
         if path == "/api/chat" and payload and payload.get("stream"):
-            socket_timeout = _float_env(
-                "OLLAMA_STREAM_SOCKET_TIMEOUT_SECONDS", 60.0, 10.0, 180.0
+            messages = payload.get("messages") or []
+            has_images = any(
+                isinstance(message, dict) and bool(message.get("images"))
+                for message in messages
             )
+            if has_images:
+                # Vision requests can spend substantial time in image preprocessing,
+                # especially when Ollama is CPU-heavy. Do not let an old general 60s
+                # socket setting kill the request at the same boundary as the app's
+                # first-token watchdog.
+                socket_timeout = _float_env(
+                    "OLLAMA_VISION_STREAM_SOCKET_TIMEOUT_SECONDS",
+                    180.0,
+                    120.0,
+                    300.0,
+                )
+            else:
+                socket_timeout = _float_env(
+                    "OLLAMA_STREAM_SOCKET_TIMEOUT_SECONDS", 120.0, 45.0, 180.0
+                )
             timeout = min(float(timeout), socket_timeout)
         return original_request(client, path, payload=payload, timeout=timeout)
 
