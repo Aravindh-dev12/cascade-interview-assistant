@@ -2,21 +2,16 @@ import base64
 import io
 import json
 import os
+import queue
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-
 import config
+from engine.nvidia_kimi import NvidiaKimiClient
 
-load_dotenv()
-
-DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", config.DEFAULT_GEMINI_MODEL)
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 KB_PATH = PROJECT_DIR / "data" / "interview_knowledge.json"
 
@@ -25,7 +20,7 @@ SYSTEM_PROMPT = (
     "Be concise, natural, and decisive. For conceptual questions, start with a 20-40 second spoken answer, "
     "then add only essential supporting points. For MCQs, put the best option on the first line. For coding "
     "questions, detect the requested language, give the approach briefly, then correct code, then time/space "
-    "complexity. For debugging, identify the bug and corrected code. Use screenshot details when supplied. "
+    "complexity. For debugging, identify the bug and corrected code. Use screenshot/camera details when supplied. "
     "Never invent personal experience, resume facts, metrics, or project details that are not present in the "
     "provided practice context. Do not repeat the question and do not add filler."
 )
@@ -98,7 +93,8 @@ class _OllamaClient:
 
     def cached_available(self):
         cached_at, ready, detail = self._status_cache
-        return ready, detail, max(0.0, time.monotonic() - cached_at) if cached_at else float("inf")
+        age = max(0.0, time.monotonic() - cached_at) if cached_at else float("inf")
+        return ready, detail, age
 
     def refresh_async(self):
         if not self._refresh_lock.acquire(blocking=False):
@@ -187,16 +183,13 @@ class _OllamaClient:
 
 
 class CopilotAI:
-    """Low-latency local-first text/vision engine with Gemini fallback."""
+    """NVIDIA Kimi-K3 + local Qwen text/vision engine."""
 
-    def __init__(self, model=None, api_key=None, provider=None):
+    def __init__(self, provider=None):
         settings = config.load_settings()
         self.provider_preference = self._normalize_provider(
-            provider or os.environ.get("AI_PROVIDER") or settings.get("ai_provider", "auto")
+            provider or os.environ.get("AI_PROVIDER") or settings.get("ai_provider", "hybrid")
         )
-        self.model = self._normalize_model(model or settings.get("model"))
-        self.api_key = self._resolve_key(api_key)
-        self._gemini_client = None
         self.interview_knowledge = _load_interview_knowledge()
         self.transcript_history = []
         self.max_transcript_history = max(4, int(os.environ.get("TRANSCRIPT_CONTEXT_LINES", "12")))
@@ -212,32 +205,22 @@ class CopilotAI:
         )
         num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", settings.get("ollama_num_ctx", 8192)))
         self.ollama = _OllamaClient(base_url, local_model, num_ctx=num_ctx)
-        self._active_provider = "gemini"
+        self.kimi = NvidiaKimiClient(api_key=os.environ.get("NVIDIA_API_KEY", ""))
+        self._active_provider = "nvidia" if self.kimi.available() else "ollama"
 
-        if self.provider_preference in {"auto", "ollama"}:
+        if self.provider_preference in {"hybrid", "ollama"}:
             threading.Thread(target=self.ollama.warmup, daemon=True, name="ollama-warmup").start()
 
     @staticmethod
     def _normalize_provider(provider):
-        provider = str(provider or "auto").strip().lower()
-        return provider if provider in {"auto", "ollama", "gemini"} else "auto"
+        provider = str(provider or "hybrid").strip().lower()
+        return provider if provider in {"hybrid", "nvidia", "ollama"} else "hybrid"
 
-    @staticmethod
-    def _normalize_model(model):
-        model = str(model or "").strip()
-        return model if model.startswith("gemini-") else DEFAULT_GEMINI_MODEL
-
-    @staticmethod
-    def _resolve_key(api_key=None):
-        supplied = (api_key or "").strip()
-        if supplied:
-            return supplied
-        return os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
-
-    def _reload_local_settings(self):
+    def _reload_settings(self):
         settings = config.load_settings()
         self.provider_preference = self._normalize_provider(
-            os.environ.get("AI_PROVIDER", "").strip() or settings.get("ai_provider", self.provider_preference)
+            os.environ.get("AI_PROVIDER", "").strip()
+            or settings.get("ai_provider", self.provider_preference)
         )
         local_model = os.environ.get("OLLAMA_MODEL", "").strip() or settings.get(
             "local_model", config.DEFAULT_LOCAL_MODEL
@@ -247,30 +230,25 @@ class CopilotAI:
         )
         num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", settings.get("ollama_num_ctx", 8192)))
         self.ollama.reconfigure(base_url=base_url, model=local_model, num_ctx=num_ctx)
+        self.kimi.reconfigure(api_key=os.environ.get("NVIDIA_API_KEY", "").strip())
 
-    def set_config(self, model=None, api_key=None, provider=None):
-        next_model = self._normalize_model(model)
-        next_key = self._resolve_key(api_key)
-        if next_key != self.api_key:
-            self._gemini_client = None
-        self.model = next_model
-        self.api_key = next_key
+    def set_config(self, provider=None):
         if provider is not None:
             self.provider_preference = self._normalize_provider(provider)
-        self._reload_local_settings()
+        self._reload_settings()
 
     def runtime_label(self):
-        if self.provider_preference in {"auto", "ollama"}:
-            ready, _, age = self.ollama.cached_available()
-            if age > 5.0:
-                self.ollama.refresh_async()
-            if ready:
-                return f"LOCAL · {self.ollama.model}"
-            if self.provider_preference == "ollama":
-                return f"LOCAL MISSING · {self.ollama.model}"
-            if age == float("inf"):
-                return f"AUTO · {self.ollama.model}"
-        return f"GEMINI · {self.model}"
+        ready, _, age = self.ollama.cached_available()
+        if age > 5.0:
+            self.ollama.refresh_async()
+        if self.provider_preference == "nvidia":
+            return f"NVIDIA · {self.kimi.model}" if self.kimi.available() else "NVIDIA KEY MISSING"
+        if self.provider_preference == "ollama":
+            return f"LOCAL · {self.ollama.model}" if ready else f"LOCAL MISSING · {self.ollama.model}"
+        if self.kimi.available():
+            fallback = self.ollama.model if ready else "Qwen fallback"
+            return f"HYBRID · Kimi K3 + {fallback}"
+        return f"HYBRID LOCAL · {self.ollama.model}" if ready else "HYBRID · no available model"
 
     def add_transcript_line(self, speaker, text):
         text = str(text or "").strip()
@@ -305,7 +283,7 @@ class CopilotAI:
             )
         parts.append("Recent transcript:\n" + self.get_formatted_transcript())
         if image_task:
-            parts.append("Screen context instructions:\n" + image_task)
+            parts.append("Visual context instructions:\n" + image_task)
         parts.append("Current task:\n" + task)
         return "\n\n".join(parts)
 
@@ -339,78 +317,140 @@ class CopilotAI:
             del self.image_history[:-self.max_image_history]
             del self.image_fingerprints[:-self.max_image_history]
 
-    def _get_gemini_client(self):
-        if not self.api_key:
-            self.api_key = self._resolve_key()
-        if not self.api_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured in the project env file")
-        if self._gemini_client is None:
-            self._gemini_client = genai.Client(api_key=self.api_key)
-        return self._gemini_client
-
-    def _gemini_stream(self, contents, max_tokens=None):
-        thinking_budget = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
-        response = self._get_gemini_client().models.generate_content_stream(
-            model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=max_tokens or int(os.environ.get("GEMINI_TEXT_MAX_TOKENS", "700")),
-                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
-            ),
+    def _qwen_stream(self, prompt, max_tokens, image_bytes_list=None):
+        ready, detail = self.ollama.available(cache_seconds=0)
+        if not ready:
+            raise RuntimeError(
+                f"Local Qwen unavailable: {detail}. Run `ollama pull {self.ollama.model}` and start Ollama."
+            )
+        self._active_provider = "ollama"
+        yield from self.ollama.chat_stream(
+            prompt,
+            max_tokens=max_tokens,
+            image_bytes_list=image_bytes_list,
         )
-        for chunk in response:
-            text = getattr(chunk, "text", None)
-            if text:
-                yield text
 
-    def _provider_for_request(self):
-        if self.provider_preference == "gemini":
-            return "gemini"
-        ready, _ = self.ollama.available()
-        if ready:
-            return "ollama"
-        if self.provider_preference == "ollama":
-            return "ollama"
-        return "gemini"
+    def _kimi_stream(self, prompt, max_tokens, image_bytes_list=None):
+        self.kimi.reconfigure(api_key=os.environ.get("NVIDIA_API_KEY", "").strip())
+        if not self.kimi.available():
+            raise RuntimeError("NVIDIA_API_KEY is missing from the project .env file")
+        self._active_provider = "nvidia"
+        yield from self.kimi.chat_stream(
+            prompt,
+            max_tokens=max_tokens,
+            image_bytes_list=image_bytes_list,
+            system_prompt=SYSTEM_PROMPT,
+        )
 
-    def _local_or_fallback_stream(self, prompt, max_tokens, image_bytes_list=None):
-        provider = self._provider_for_request()
-        if provider == "ollama":
-            self._active_provider = "ollama"
+    @staticmethod
+    def _run_provider(name, factory, events):
+        try:
+            produced = False
+            for piece in factory():
+                if not piece:
+                    continue
+                produced = True
+                events.put((name, "chunk", piece))
+            events.put((name, "done", None if produced else "no answer tokens"))
+        except Exception as exc:
+            events.put((name, "error", exc))
+
+    def _hybrid_stream(self, prompt, max_tokens, image_bytes_list=None):
+        if not self.kimi.available():
+            yield from self._qwen_stream(prompt, max_tokens, image_bytes_list)
+            return
+
+        started = time.monotonic()
+        events = queue.Queue()
+        errors = {}
+        done = set()
+        winner = None
+        qwen_started = False
+        hedge_seconds = max(
+            0.35,
+            min(4.0, float(os.environ.get("HYBRID_HEDGE_SECONDS", "1.25"))),
+        )
+
+        print(
+            f"[hybrid] Request started · visual={bool(image_bytes_list)} · "
+            f"Kimi head-start={hedge_seconds:.2f}s"
+        )
+        threading.Thread(
+            target=self._run_provider,
+            args=("kimi", lambda: self._kimi_stream(prompt, max_tokens, image_bytes_list), events),
+            daemon=True,
+            name="hybrid-kimi",
+        ).start()
+
+        while winner is None:
+            elapsed = time.monotonic() - started
+            if not qwen_started and elapsed >= hedge_seconds:
+                qwen_started = True
+                print("[hybrid] Kimi has no first token yet; starting local Qwen hedge.")
+                threading.Thread(
+                    target=self._run_provider,
+                    args=("qwen", lambda: self._qwen_stream(prompt, max_tokens, image_bytes_list), events),
+                    daemon=True,
+                    name="hybrid-qwen",
+                ).start()
+
             try:
-                yielded = False
-                for piece in self.ollama.chat_stream(
-                    prompt,
-                    max_tokens=max_tokens,
-                    image_bytes_list=image_bytes_list,
-                ):
-                    yielded = True
-                    yield piece
-                if yielded:
-                    return
-            except Exception as exc:
-                if self.provider_preference == "ollama" or not self.api_key:
-                    raise RuntimeError(
-                        f"Local model failed: {exc}. Install/start Ollama and run `ollama pull {self.ollama.model}`."
-                    ) from exc
-                print(f"[ollama] Local request failed; falling back to Gemini: {exc}")
+                name, event_type, payload = events.get(timeout=0.05)
+            except queue.Empty:
+                continue
 
-        self._active_provider = "gemini"
-        if image_bytes_list:
-            from PIL import Image
+            if event_type == "chunk":
+                winner = name
+                self._active_provider = "nvidia" if name == "kimi" else "ollama"
+                print(f"[hybrid] {name.upper()} won first token in {time.monotonic() - started:.2f}s")
+                yield payload
+                break
+            if event_type == "error":
+                errors[name] = payload
+                print(f"[hybrid] {name} failed before first token: {payload}")
+                if name == "kimi" and not qwen_started:
+                    qwen_started = True
+                    threading.Thread(
+                        target=self._run_provider,
+                        args=("qwen", lambda: self._qwen_stream(prompt, max_tokens, image_bytes_list), events),
+                        daemon=True,
+                        name="hybrid-qwen",
+                    ).start()
+            elif event_type == "done":
+                done.add(name)
+                if payload:
+                    errors[name] = RuntimeError(str(payload))
 
-            contents = [prompt]
-            for frame in image_bytes_list:
-                contents.append(Image.open(io.BytesIO(frame)).convert("RGB"))
-            yield from self._gemini_stream(contents, max_tokens=max_tokens)
-        else:
-            yield from self._gemini_stream(prompt, max_tokens=max_tokens)
+            if qwen_started and len(errors) + len(done) >= 2 and winner is None:
+                details = "; ".join(f"{name}: {err}" for name, err in errors.items()) or "no provider produced output"
+                raise RuntimeError(f"Hybrid inference failed: {details}")
+
+        while True:
+            name, event_type, payload = events.get()
+            if name != winner:
+                continue
+            if event_type == "chunk":
+                yield payload
+            elif event_type == "done":
+                return
+            elif event_type == "error":
+                print(f"[hybrid] {winner} stream ended after partial output: {payload}")
+                return
+
+    def _route_stream(self, prompt, max_tokens, image_bytes_list=None):
+        self._reload_settings()
+        if self.provider_preference == "nvidia":
+            yield from self._kimi_stream(prompt, max_tokens, image_bytes_list)
+            return
+        if self.provider_preference == "ollama":
+            yield from self._qwen_stream(prompt, max_tokens, image_bytes_list)
+            return
+        yield from self._hybrid_stream(prompt, max_tokens, image_bytes_list)
 
     def generate_text_stream(self, custom_query=None):
         prompt = self._build_prompt(custom_query)
-        max_tokens = int(os.environ.get("LOCAL_TEXT_MAX_TOKENS", os.environ.get("GEMINI_TEXT_MAX_TOKENS", "700")))
-        yield from self._local_or_fallback_stream(prompt, max_tokens=max_tokens)
+        max_tokens = int(os.environ.get("TEXT_MAX_TOKENS", "700"))
+        yield from self._route_stream(prompt, max_tokens=max_tokens)
 
     def generate_vision_stream(self, image_bytes, custom_query=None, use_image_history=False):
         if use_image_history:
@@ -421,16 +461,16 @@ class CopilotAI:
 
         image_task = (
             "Read visible text/code carefully. Determine whether this is a coding problem, MCQ, debugging task, "
-            "terminal error, diagram, system-design prompt, or conceptual question. Use all supplied frames as one "
-            "chronological problem context when multiple frames are present. Deduplicate overlap caused by scrolling. "
-            "Do not guess missing constraints."
+            "terminal error, diagram, system-design prompt, conceptual question, document, or camera object. "
+            "Use all supplied frames as one chronological problem context when multiple frames are present. "
+            "Deduplicate overlap caused by scrolling. Do not guess missing constraints."
         )
         prompt = self._build_prompt(
             custom_query or "Solve or explain the current visible practice question. Give the useful answer first.",
             image_task=image_task,
         )
-        max_tokens = int(os.environ.get("LOCAL_VISION_MAX_TOKENS", os.environ.get("GEMINI_VISION_MAX_TOKENS", "1600")))
-        yield from self._local_or_fallback_stream(prompt, max_tokens=max_tokens, image_bytes_list=frames)
+        max_tokens = int(os.environ.get("VISION_MAX_TOKENS", "1200"))
+        yield from self._route_stream(prompt, max_tokens=max_tokens, image_bytes_list=frames)
 
     def generate_answer_stream(self, image_bytes=None, custom_query=None, use_image_history=False):
         if not _practice_mode_enabled():
