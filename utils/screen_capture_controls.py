@@ -1,5 +1,6 @@
 import ctypes
 import os
+from ctypes import wintypes
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QPushButton, QWidget
@@ -70,7 +71,7 @@ class ScreenCaptureControls:
             if hwnd == overlay_hwnd:
                 return
 
-            rect = ctypes.wintypes.RECT()
+            rect = wintypes.RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 return
             width = int(rect.right - rect.left)
