@@ -10,12 +10,12 @@ def _env_enabled(name, default=True):
 
 
 def install_visual_autopilot():
-    """Make fresh screen/camera context participate automatically in practice answers.
+    """Keep visual context fresh without starving real-time spoken answers.
 
-    Stable screen frames can be answered while listening, and fresh visuals can be
-    attached to substantive interviewer questions. Automatic screen answers use only
-    the current frame so MCQ/coding latency does not grow as image history accumulates.
-    Manual captures can still use image history for scrolling/multi-frame context.
+    While live listening is active, stable screen frames are cached continuously but
+    are not submitted on their own. A spoken question attaches the fresh visual only
+    when the question actually refers to the visible problem/code/MCQ/camera. Manual
+    Capture and Camera actions always force an immediate vision request.
     """
     from ui import overlay_window as overlay_module
     from ui.settings_dialog import SettingsDialog
@@ -25,18 +25,23 @@ def install_visual_autopilot():
     if getattr(OverlayWindow, "_visual_autopilot_installed", False):
         return
 
-    original_should_attach = overlay_module.should_attach_screen
     original_handle_transcription = OverlayWindow.handle_transcription
     original_camera_init = CameraVisionControls.__init__
     original_analyze_camera = CameraVisionControls.analyze_camera
     original_settings_init = SettingsDialog.__init__
 
-    def should_attach_visual(text):
-        if _env_enabled("ALWAYS_ATTACH_FRESH_VISUAL", True):
+    def _screen_request_pending(window):
+        if any(item.get("kind") == "screen" for item in window.requests.values()):
             return True
-        return original_should_attach(text)
+        return any(item.get("kind") == "screen" for item in window.request_queue)
 
-    overlay_module.should_attach_screen = should_attach_visual
+    def _supersede_auto_screen_requests(window):
+        window.request_queue = [
+            item for item in window.request_queue if item.get("kind") != "screen"
+        ]
+        for request_id, active in list(window.requests.items()):
+            if active.get("kind") == "screen":
+                window.stale_request_ids.add(request_id)
 
     def handle_transcription(window, speaker, text):
         if speaker == "Interviewer" and overlay_module.is_substantive_question(text):
@@ -47,11 +52,14 @@ def install_visual_autopilot():
                 and window.latest_screen_bytes
                 and now - window.latest_screen_time <= max_age
             )
-            if visual_ready and _env_enabled("ALWAYS_ATTACH_FRESH_VISUAL", True):
+            needs_visual = overlay_module.should_attach_screen(text)
+            if visual_ready and needs_visual:
                 print(
-                    f"[vision] Fresh visual context attached to interviewer question · "
+                    f"[vision] Interviewer prompt needs visual context · "
                     f"age={now - window.latest_screen_time:.2f}s"
                 )
+            elif visual_ready:
+                print("[vision] Interviewer prompt routed text-only; cached screen not attached.")
         return original_handle_transcription(window, speaker, text)
 
     def handle_screen_frame(window, image_bytes):
@@ -59,25 +67,34 @@ def install_visual_autopilot():
         window.latest_screen_time = time.monotonic()
         window.screen_meta.setText("SCREEN CONTEXT LIVE")
 
+        # During an interview, screen capture remains live but inference is driven by
+        # interviewer intent. This prevents screenshots from flooding Kimi/Qwen and
+        # starving a simple spoken question such as "Tell me about yourself".
+        if window.audio_recorder.is_recording and not _env_enabled(
+            "AUTO_VISUAL_WHILE_LISTENING", False
+        ):
+            return
+
         if not _env_enabled("AUTO_VISUAL_ANSWER", True):
             return
         if not window.settings.get("auto_answer_screen", True):
             return
         if not overlay_module._practice_mode_enabled():
             return
+        if _screen_request_pending(window):
+            return
 
         now = time.monotonic()
         cooldown = max(
-            0.8,
-            float(os.environ.get("VISUAL_AUTO_ANSWER_COOLDOWN_SECONDS", "2.0")),
+            1.5,
+            float(os.environ.get("VISUAL_AUTO_ANSWER_COOLDOWN_SECONDS", "4.0")),
         )
         if now - window.last_screen_answer_time < cooldown:
             return
         window.last_screen_answer_time = now
 
-        mode = "while listening" if window.audio_recorder.is_recording else "screen-only"
         print(
-            f"[vision] Stable screen frame -> AI · {mode} · "
+            f"[vision] Stable screen frame -> AI · screen-only · "
             f"bytes={len(image_bytes)} · frames=1"
         )
         window._enqueue_ai(
@@ -98,6 +115,7 @@ def install_visual_autopilot():
     def submit_screen_capture(window, image_bytes, source="Manual screen capture"):
         window.latest_screen_bytes = image_bytes
         window.latest_screen_time = time.monotonic()
+        _supersede_auto_screen_requests(window)
         print(f"[vision] Manual screen capture -> AI · bytes={len(image_bytes)}")
         window._enqueue_ai(
             source=source,
@@ -109,7 +127,7 @@ def install_visual_autopilot():
                 "and time/space complexity. For debugging, errors, SQL, output, diagrams, or conceptual "
                 "questions, give the direct answer first. Read all visible text carefully."
             ),
-            use_image_history=True,
+            use_image_history=False,
         )
 
     def camera_init(controller, window):
@@ -121,6 +139,7 @@ def install_visual_autopilot():
 
     def analyze_camera(controller):
         if controller.latest_camera_bytes:
+            _supersede_auto_screen_requests(controller.window)
             print(
                 f"[vision] Camera frame -> AI · bytes={len(controller.latest_camera_bytes)}"
             )
@@ -130,11 +149,11 @@ def install_visual_autopilot():
         original_settings_init(dialog, current_settings, parent)
         if hasattr(dialog, "screen_answer_check"):
             dialog.screen_answer_check.setText(
-                "Automatically analyze stable visible questions, including while listening"
+                "Automatically analyze stable visible questions when not listening"
             )
         if hasattr(dialog, "include_screen_check"):
             dialog.include_screen_check.setText(
-                "Attach fresh screen/camera context to substantive interviewer questions"
+                "Attach fresh screen/camera only when the interviewer refers to it"
             )
 
     OverlayWindow.handle_transcription = handle_transcription
