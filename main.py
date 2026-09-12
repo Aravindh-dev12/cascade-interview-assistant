@@ -17,6 +17,7 @@ from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
 from utils.candidate_context import install_candidate_context
 from utils.inference_watchdog import install_inference_watchdog
+from utils.local_qwen_pipeline import install_local_qwen_pipeline
 from utils.mouse_passthrough import MousePassthroughController
 from utils.realtime_multimodal import (
     CameraVisionControls,
@@ -77,6 +78,7 @@ def main():
     install_visual_autopilot()
     install_inference_watchdog()
     install_candidate_context()
+    install_local_qwen_pipeline()
 
     print(f"[env] project dir: {PROJECT_DIR}")
     print(f"[env] env file: {env_status['selected_path'] or 'NOT FOUND'}")
@@ -84,9 +86,16 @@ def main():
     print(f"[env] detected names: {', '.join(env_status['detected_names']) or 'none'}")
     print(f"[env] NVIDIA_API_KEY loaded: {env_status['nvidia_loaded']}")
     print(f"[env] PRACTICE_MODE enabled: {env_status['practice_mode']}")
-    print(f"[env] AI_PROVIDER: {os.environ.get('AI_PROVIDER', 'hybrid')}")
-    print(f"[env] NVIDIA_KIMI_MODEL: {os.environ.get('NVIDIA_KIMI_MODEL', 'moonshotai/kimi-k3')}")
+    print(f"[env] AI_PROVIDER: ollama (forced final answer engine)")
     print(f"[env] OLLAMA_MODEL: {os.environ.get('OLLAMA_MODEL', 'qwen3.5:4b')}")
+    print(
+        f"[env] NVIDIA_VISION_MODEL: "
+        f"{os.environ.get('NVIDIA_VISION_MODEL', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning')}"
+    )
+    print(
+        f"[env] NVIDIA_RIVA_FUNCTION_ID: "
+        f"{os.environ.get('NVIDIA_RIVA_FUNCTION_ID', '1598d209-5e27-4d3c-8079-4751568b1081')}"
+    )
     if not env_status["exists"]:
         print(
             "[env] WARNING: no project .env found. Copy .env.template to .env, "
@@ -136,12 +145,13 @@ def main():
         QTimer.singleShot(250, window.toggle_recording)
 
     print("[main] quntumnintent running.")
-    print("AI: NVIDIA Kimi-K3 + local Qwen/Ollama only.")
+    print("Audio: NVIDIA Parakeet CTC streaming ASR -> transcript.")
+    print("Answers: local Qwen 3.5/Ollama only.")
+    print("Vision: NVIDIA Nemotron Omni image-to-text -> local Qwen answer.")
     print("NVIDIA_API_KEY is loaded only from the project .env file.")
     print("Live screen context is cached while listening; only screen-dependent spoken prompts attach it.")
     print("Manual Capture/Camera always force image analysis.")
     print("Candidate context: data/candidate_context.local.md (git-ignored local file).")
-    print("Inference watchdog: stalled providers cannot block later questions indefinitely.")
     print("Ctrl+Shift+S: capture screen and answer.")
     print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
     print("Camera button: analyze the latest live camera frame.")
