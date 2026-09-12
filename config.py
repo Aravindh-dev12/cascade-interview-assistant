@@ -20,20 +20,21 @@ DEFAULT_SETTINGS = {
     "camera_capture_enabled": True,
     "camera_frame_interval_ms": 450,
     "camera_context_max_age_seconds": 3.0,
-    "include_camera_with_speech": True,
+    "include_camera_with_speech": False,
     "hotkey_capture": "<ctrl>+<shift>+s",
     "hotkey_record": "<ctrl>+<shift>+a",
     "capture_region": None,
-    "auto_start_listening": True,
+    # Manual-first controls: the user explicitly starts/stops listening and captures screens.
+    "auto_start_listening": False,
     "auto_answer_speech": True,
     "answer_cooldown_seconds": 0.25,
-    "auto_screen_watch": True,
-    "auto_answer_screen": True,
+    "auto_screen_watch": False,
+    "auto_answer_screen": False,
     "screen_watch_interval_ms": 650,
     "screen_stable_ms": 450,
     "screen_change_threshold": 0.055,
     "screen_context_max_age_seconds": 12.0,
-    "include_screen_with_speech": True,
+    "include_screen_with_speech": False,
     "window_opacity": 0.94,
     "invisible_mode": False,
     "font_size": 13,
@@ -49,6 +50,16 @@ def _normalize_provider(provider):
 def _normalize_local_model(model):
     model = str(model or "").strip()
     return model or DEFAULT_LOCAL_MODEL
+
+
+def _apply_manual_control_policy(settings):
+    """Keep the runtime deterministic: Listen/Stop, Capture, and Send are user actions."""
+    settings["auto_start_listening"] = False
+    settings["auto_screen_watch"] = False
+    settings["auto_answer_screen"] = False
+    settings["include_screen_with_speech"] = False
+    settings["include_camera_with_speech"] = False
+    return settings
 
 
 def load_settings():
@@ -75,7 +86,7 @@ def load_settings():
     settings["camera_context_max_age_seconds"] = max(
         0.5, float(settings.get("camera_context_max_age_seconds", 3.0))
     )
-    return settings
+    return _apply_manual_control_policy(settings)
 
 
 def save_settings(settings):
@@ -102,6 +113,7 @@ def save_settings(settings):
         clean_settings["camera_context_max_age_seconds"] = max(
             0.5, float(clean_settings.get("camera_context_max_age_seconds", 3.0))
         )
+        _apply_manual_control_policy(clean_settings)
 
         with open(CONFIG_FILE, "w", encoding="utf-8") as file:
             json.dump(clean_settings, file, indent=4)
