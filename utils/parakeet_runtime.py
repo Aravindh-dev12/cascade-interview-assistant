@@ -12,10 +12,26 @@ KNOWN_NON_PARAKEET_ENGLISH_IDS = {
 }
 
 
+def _migrate_environment():
+    language = os.environ.get("NVIDIA_RIVA_LANGUAGE", "en-US").strip() or "en-US"
+    configured = os.environ.get("NVIDIA_RIVA_FUNCTION_ID", "").strip()
+    if language.lower().startswith("en") and (
+        not configured or configured in KNOWN_NON_PARAKEET_ENGLISH_IDS
+    ):
+        os.environ["NVIDIA_RIVA_FUNCTION_ID"] = PARAKEET_CTC_EN_US_FUNCTION_ID
+        if configured and configured != PARAKEET_CTC_EN_US_FUNCTION_ID:
+            print(
+                f"[stt] Replaced incompatible ASR function-id {configured} with "
+                f"Parakeet CTC English {PARAKEET_CTC_EN_US_FUNCTION_ID}."
+            )
+    os.environ["NVIDIA_RIVA_LANGUAGE"] = language
+
+
 def install_parakeet_runtime():
     """Make NVIDIA Parakeet CTC English the realtime streaming ASR backend."""
     from engine.stt_worker import STTWorker
 
+    _migrate_environment()
     if getattr(STTWorker, "_parakeet_runtime_installed", False):
         return
 
@@ -23,21 +39,10 @@ def install_parakeet_runtime():
 
     def worker_init(worker, audio_recorder, api_key=None):
         original_init(worker, audio_recorder, api_key=api_key)
-        language = os.environ.get("NVIDIA_RIVA_LANGUAGE", worker.language_code or "en-US").strip()
-        configured = os.environ.get("NVIDIA_RIVA_FUNCTION_ID", "").strip()
-        worker.language_code = language or "en-US"
-
-        if worker.language_code.lower().startswith("en") and (
-            not configured or configured in KNOWN_NON_PARAKEET_ENGLISH_IDS
-        ):
-            worker.function_id = PARAKEET_CTC_EN_US_FUNCTION_ID
-            if configured and configured != worker.function_id:
-                print(
-                    f"[stt] Replaced incompatible ASR function-id {configured} with "
-                    f"Parakeet CTC English {worker.function_id}."
-                )
-        elif configured:
-            worker.function_id = configured
+        worker.language_code = os.environ.get("NVIDIA_RIVA_LANGUAGE", "en-US").strip() or "en-US"
+        worker.function_id = os.environ.get(
+            "NVIDIA_RIVA_FUNCTION_ID", PARAKEET_CTC_EN_US_FUNCTION_ID
+        ).strip()
 
     def ensure_client(worker):
         if worker._asr_service is None:
