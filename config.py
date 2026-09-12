@@ -6,7 +6,7 @@ DEFAULT_LOCAL_MODEL = "qwen3.5:4b"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 DEFAULT_SETTINGS = {
-    "ai_provider": "hybrid",  # NVIDIA Kimi K3 first, local Qwen fallback
+    "ai_provider": "ollama",  # final answers always come from local Qwen
     "local_model": DEFAULT_LOCAL_MODEL,
     "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
     "ollama_num_ctx": 8192,
@@ -42,8 +42,8 @@ DEFAULT_SETTINGS = {
 
 
 def _normalize_provider(provider):
-    provider = str(provider or "").strip().lower()
-    return provider if provider in {"hybrid", "nvidia", "ollama"} else "hybrid"
+    # Legacy Kimi/hybrid values are intentionally migrated to local Qwen.
+    return "ollama"
 
 
 def _normalize_local_model(model):
