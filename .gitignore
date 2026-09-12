@@ -5,6 +5,11 @@
 env
 !.env.template
 
+# Private local interview/resume/project context
+/data/candidate_context.local.md
+/data/candidate_context.local.txt
+/data/candidate_context.local.json
+
 # Python
 __pycache__/
 *.py[cod]
