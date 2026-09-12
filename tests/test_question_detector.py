@@ -17,10 +17,31 @@ class QuestionDetectorTests(unittest.TestCase):
         )
         self.assertTrue(is_substantive_question("How would you optimize this algorithm"))
 
+    def test_asr_without_question_punctuation(self):
+        self.assertTrue(
+            is_substantive_question("Tell me about a challenging project you worked on")
+        )
+        self.assertTrue(
+            is_substantive_question("For this role how would you design a scalable API")
+        )
+        self.assertTrue(
+            is_substantive_question("Your approach to debugging a production performance issue")
+        )
+        self.assertTrue(
+            is_substantive_question("Difference between an abstract class and an interface")
+        )
+
     def test_acknowledgements(self):
         self.assertFalse(is_substantive_question("Okay."))
         self.assertFalse(is_substantive_question("Great"))
         self.assertFalse(is_substantive_question("yes"))
+        self.assertFalse(is_substantive_question("Makes sense"))
+        self.assertFalse(is_substantive_question("Perfect"))
+
+    def test_non_prompt_statement(self):
+        self.assertFalse(
+            is_substantive_question("We will continue with the next section shortly")
+        )
 
     def test_screen_reference(self):
         self.assertTrue(should_attach_screen("Can you fix this code?"))
