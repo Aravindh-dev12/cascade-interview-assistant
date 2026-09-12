@@ -1,16 +1,14 @@
-import base64
 import io
 import json
 import os
-import queue
-import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+from google import genai
+from google.genai import types
+
 import config
-from engine.nvidia_kimi import NvidiaKimiClient
+from engine.nvidia_omni_vision import NvidiaOmniVisionClient
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 KB_PATH = PROJECT_DIR / "data" / "interview_knowledge.json"
@@ -19,15 +17,20 @@ SYSTEM_PROMPT = (
     "You are a low-latency technical interview practice coach. Give the candidate-ready answer immediately. "
     "Be concise, natural, and decisive. For conceptual questions, start with a 20-40 second spoken answer, "
     "then add only essential supporting points. For MCQs, put the best option on the first line. For coding "
-    "questions, detect the requested language, give the approach briefly, then correct code, then time/space "
-    "complexity. For debugging, identify the bug and corrected code. Use screenshot/camera details when supplied. "
-    "Never invent personal experience, resume facts, metrics, or project details that are not present in the "
-    "provided practice context. Do not repeat the question and do not add filler."
+    "questions, detect the requested language, give the approach briefly, then complete correct code, then "
+    "time/space complexity. For debugging, identify the bug and provide corrected code. Use supplied screen "
+    "or camera evidence carefully. Never invent personal experience, resume facts, metrics, project details, "
+    "or unreadable visual text. Do not repeat the question and do not add filler."
 )
 
 
 def _practice_mode_enabled():
-    return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
+    return os.environ.get("PRACTICE_MODE", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _load_interview_knowledge():
@@ -39,216 +42,80 @@ def _load_interview_knowledge():
         return {}
 
 
-class _OllamaClient:
-    def __init__(self, base_url, model, num_ctx=8192):
-        self.base_url = str(base_url or config.DEFAULT_OLLAMA_BASE_URL).rstrip("/")
-        self.model = str(model or config.DEFAULT_LOCAL_MODEL).strip()
-        self.num_ctx = max(2048, int(num_ctx or 8192))
-        self.keep_alive = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
-        self._status_cache = (0.0, False, "")
-        self._refresh_lock = threading.Lock()
+def _gemini_key():
+    return (
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_API_KEY", "").strip()
+    )
 
-    def reconfigure(self, base_url=None, model=None, num_ctx=None):
-        next_base_url = str(base_url or self.base_url).rstrip("/")
-        next_model = str(model or self.model).strip()
-        next_num_ctx = max(2048, int(num_ctx if num_ctx is not None else self.num_ctx))
-        changed = (
-            next_base_url != self.base_url
-            or next_model != self.model
-            or next_num_ctx != self.num_ctx
-        )
-        self.base_url = next_base_url
-        self.model = next_model
-        self.num_ctx = next_num_ctx
-        if changed:
-            self._status_cache = (0.0, False, "")
 
-    def _request(self, path, payload=None, timeout=2.0):
-        url = f"{self.base_url}{path}"
-        data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="GET" if payload is None else "POST",
-        )
-        return urllib.request.urlopen(request, timeout=timeout)
-
-    def available(self, cache_seconds=2.0):
-        now = time.monotonic()
-        cached_at, ready, detail = self._status_cache
-        if now - cached_at < cache_seconds:
-            return ready, detail
-        try:
-            with self._request("/api/tags", timeout=0.35) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            names = [str(item.get("name", "")) for item in payload.get("models", [])]
-            ready = self.model in names or any(name.split(":", 1)[0] == self.model for name in names)
-            detail = self.model if ready else f"model not installed: {self.model}"
-        except Exception as exc:
-            ready = False
-            detail = str(exc)
-        self._status_cache = (now, ready, detail)
-        return ready, detail
-
-    def cached_available(self):
-        cached_at, ready, detail = self._status_cache
-        age = max(0.0, time.monotonic() - cached_at) if cached_at else float("inf")
-        return ready, detail, age
-
-    def refresh_async(self):
-        if not self._refresh_lock.acquire(blocking=False):
-            return
-
-        def refresh():
-            try:
-                self.available(cache_seconds=0)
-            finally:
-                self._refresh_lock.release()
-
-        threading.Thread(target=refresh, daemon=True, name="ollama-status").start()
-
-    def warmup(self):
-        ready, _ = self.available(cache_seconds=0)
-        if not ready:
-            return False
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "Reply with one word."},
-                {"role": "user", "content": "ready"},
-            ],
-            "stream": False,
-            "think": False,
-            "keep_alive": self.keep_alive,
-            "options": {
-                "num_ctx": min(self.num_ctx, 4096),
-                "num_predict": 1,
-                "temperature": 0,
-            },
-        }
-        try:
-            with self._request("/api/chat", payload=payload, timeout=120) as response:
-                response.read()
-            print(f"[ollama] Warmed local model: {self.model}")
-            return True
-        except Exception as exc:
-            print(f"[ollama] Warmup failed: {exc}")
-            return False
-
-    def chat_stream(self, prompt, max_tokens, image_bytes_list=None):
-        user_message = {"role": "user", "content": prompt}
-        if image_bytes_list:
-            user_message["images"] = [
-                base64.b64encode(image_bytes).decode("ascii")
-                for image_bytes in image_bytes_list
-                if image_bytes
-            ]
-
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                user_message,
-            ],
-            "stream": True,
-            "think": False,
-            "keep_alive": self.keep_alive,
-            "options": {
-                "num_ctx": self.num_ctx,
-                "num_predict": int(max_tokens),
-                "temperature": float(os.environ.get("OLLAMA_TEMPERATURE", "0.15")),
-                "top_p": float(os.environ.get("OLLAMA_TOP_P", "0.9")),
-            },
-        }
-
-        try:
-            with self._request("/api/chat", payload=payload, timeout=180) as response:
-                for raw_line in response:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line:
-                        continue
-                    item = json.loads(line)
-                    message = item.get("message") or {}
-                    content = message.get("content") or ""
-                    if content:
-                        yield content
-                    if item.get("done"):
-                        break
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
-            raise RuntimeError(f"Ollama HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Ollama unavailable at {self.base_url}: {exc.reason}") from exc
+def _mime_type(image_bytes):
+    if bytes(image_bytes or b"")[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    return "image/jpeg"
 
 
 class CopilotAI:
-    """NVIDIA Kimi-K3 + local Qwen text/vision engine."""
+    """Gemini 2.5 Flash final-answer engine with NVIDIA visual extraction.
 
-    def __init__(self, provider=None):
+    Text path:
+        NVIDIA Parakeet transcript -> Gemini 2.5 Flash -> overlay.
+
+    Visual path:
+        Manual screen/camera -> NVIDIA Nemotron Omni extraction -> Gemini 2.5 Flash.
+        If NVIDIA vision is unavailable or returns unusable text, the original image is
+        sent directly to Gemini 2.5 Flash. There is no Ollama/local-model path.
+    """
+
+    def __init__(self, provider=None, model=None, api_key=None):
         settings = config.load_settings()
-        self.provider_preference = self._normalize_provider(
-            provider or os.environ.get("AI_PROVIDER") or settings.get("ai_provider", "hybrid")
-        )
+        self.provider_preference = "gemini"
+        self.model = config.DEFAULT_GEMINI_MODEL
+        self.api_key = (api_key or _gemini_key()).strip()
+        self._gemini_client = None
+        self._client_key = None
+        self._active_provider = "gemini"
+
         self.interview_knowledge = _load_interview_knowledge()
         self.transcript_history = []
-        self.max_transcript_history = max(4, int(os.environ.get("TRANSCRIPT_CONTEXT_LINES", "12")))
+        self.max_transcript_history = max(
+            4, int(os.environ.get("TRANSCRIPT_CONTEXT_LINES", "12"))
+        )
         self.image_history = []
         self.image_fingerprints = []
-        self.max_image_history = max(1, int(os.environ.get("PRACTICE_IMAGE_CONTEXT_FRAMES", "3")))
-
-        local_model = os.environ.get("OLLAMA_MODEL", "").strip() or settings.get(
-            "local_model", config.DEFAULT_LOCAL_MODEL
+        self.max_image_history = max(
+            1, int(os.environ.get("PRACTICE_IMAGE_CONTEXT_FRAMES", "1"))
         )
-        base_url = os.environ.get("OLLAMA_BASE_URL", "").strip() or settings.get(
-            "ollama_base_url", config.DEFAULT_OLLAMA_BASE_URL
+        self.omni_vision = NvidiaOmniVisionClient(
+            api_key=os.environ.get("NVIDIA_API_KEY", "")
         )
-        num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", settings.get("ollama_num_ctx", 8192)))
-        self.ollama = _OllamaClient(base_url, local_model, num_ctx=num_ctx)
-        self.kimi = NvidiaKimiClient(api_key=os.environ.get("NVIDIA_API_KEY", ""))
-        self._active_provider = "nvidia" if self.kimi.available() else "ollama"
 
-        if self.provider_preference in {"hybrid", "ollama"}:
-            threading.Thread(target=self.ollama.warmup, daemon=True, name="ollama-warmup").start()
-
-    @staticmethod
-    def _normalize_provider(provider):
-        provider = str(provider or "hybrid").strip().lower()
-        return provider if provider in {"hybrid", "nvidia", "ollama"} else "hybrid"
-
-    def _reload_settings(self):
-        settings = config.load_settings()
-        self.provider_preference = self._normalize_provider(
-            os.environ.get("AI_PROVIDER", "").strip()
-            or settings.get("ai_provider", self.provider_preference)
+        # Ignore stale saved provider/model values. This build is intentionally fixed
+        # to Gemini 2.5 Flash for final answers.
+        self.set_config(
+            provider="gemini",
+            model=settings.get("model", config.DEFAULT_GEMINI_MODEL),
+            api_key=self.api_key,
         )
-        local_model = os.environ.get("OLLAMA_MODEL", "").strip() or settings.get(
-            "local_model", config.DEFAULT_LOCAL_MODEL
+        print(
+            f"[pipeline] Final answer engine: Google {self.model}; "
+            f"vision extractor: {self.omni_vision.model}; local models disabled"
         )
-        base_url = os.environ.get("OLLAMA_BASE_URL", "").strip() or settings.get(
-            "ollama_base_url", config.DEFAULT_OLLAMA_BASE_URL
-        )
-        num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", settings.get("ollama_num_ctx", 8192)))
-        self.ollama.reconfigure(base_url=base_url, model=local_model, num_ctx=num_ctx)
-        self.kimi.reconfigure(api_key=os.environ.get("NVIDIA_API_KEY", "").strip())
 
-    def set_config(self, provider=None):
-        if provider is not None:
-            self.provider_preference = self._normalize_provider(provider)
-        self._reload_settings()
+    def set_config(self, provider=None, model=None, api_key=None):
+        self.provider_preference = "gemini"
+        self.model = config.DEFAULT_GEMINI_MODEL
+        next_key = (api_key or _gemini_key()).strip()
+        if next_key != self.api_key:
+            self.api_key = next_key
+            self._gemini_client = None
+            self._client_key = None
+        self.omni_vision.reconfigure()
 
     def runtime_label(self):
-        ready, _, age = self.ollama.cached_available()
-        if age > 5.0:
-            self.ollama.refresh_async()
-        if self.provider_preference == "nvidia":
-            return f"NVIDIA · {self.kimi.model}" if self.kimi.available() else "NVIDIA KEY MISSING"
-        if self.provider_preference == "ollama":
-            return f"LOCAL · {self.ollama.model}" if ready else f"LOCAL MISSING · {self.ollama.model}"
-        if self.kimi.available():
-            fallback = self.ollama.model if ready else "Qwen fallback"
-            return f"HYBRID · Kimi K3 + {fallback}"
-        return f"HYBRID LOCAL · {self.ollama.model}" if ready else "HYBRID · no available model"
+        if not _gemini_key():
+            return f"GEMINI KEY MISSING · {self.model} · NVIDIA Parakeet/vision"
+        return f"GEMINI · {self.model} · NVIDIA Parakeet + vision"
 
     def add_transcript_line(self, speaker, text):
         text = str(text or "").strip()
@@ -266,20 +133,29 @@ class CopilotAI:
     def get_formatted_transcript(self):
         if not self.transcript_history:
             return "[No conversation recorded yet]"
-        return "\n".join(f"{item['speaker']}: {item['text']}" for item in self.transcript_history)
+        return "\n".join(
+            f"{item['speaker']}: {item['text']}" for item in self.transcript_history
+        )
 
     def _knowledge_context(self):
         if not _practice_mode_enabled() or not self.interview_knowledge:
             return ""
-        return json.dumps(self.interview_knowledge, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            self.interview_knowledge,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     def _build_prompt(self, custom_query=None, image_task=None):
-        task = custom_query or "Answer the latest substantive interviewer question in the practice transcript."
+        task = custom_query or (
+            "Answer the latest substantive interviewer question in the practice transcript."
+        )
         parts = []
         knowledge = self._knowledge_context()
         if knowledge:
             parts.append(
-                "Candidate/role practice context follows. Use only when relevant; never invent beyond it:\n" + knowledge
+                "Candidate/role practice context follows. Use only when relevant; never invent beyond it:\n"
+                + knowledge
             )
         parts.append("Recent transcript:\n" + self.get_formatted_transcript())
         if image_task:
@@ -298,16 +174,23 @@ class CopilotAI:
     def _fingerprint_distance(left, right):
         if not left or not right or len(left) != len(right):
             return 1.0
-        return sum(abs(a - b) for a, b in zip(left, right)) / (255.0 * len(left))
+        return sum(abs(a - b) for a, b in zip(left, right)) / (
+            255.0 * len(left)
+        )
 
     def _remember_image(self, image_bytes):
         try:
             fp = self._image_fingerprint(image_bytes)
         except Exception:
             fp = b""
-        duplicate_threshold = float(os.environ.get("PRACTICE_IMAGE_DUPLICATE_THRESHOLD", "0.012"))
+        duplicate_threshold = float(
+            os.environ.get("PRACTICE_IMAGE_DUPLICATE_THRESHOLD", "0.012")
+        )
         if self.image_fingerprints and fp:
-            if self._fingerprint_distance(self.image_fingerprints[-1], fp) <= duplicate_threshold:
+            if (
+                self._fingerprint_distance(self.image_fingerprints[-1], fp)
+                <= duplicate_threshold
+            ):
                 self.image_history[-1] = image_bytes
                 self.image_fingerprints[-1] = fp
                 return
@@ -317,162 +200,179 @@ class CopilotAI:
             del self.image_history[:-self.max_image_history]
             del self.image_fingerprints[:-self.max_image_history]
 
-    def _qwen_stream(self, prompt, max_tokens, image_bytes_list=None):
-        ready, detail = self.ollama.available(cache_seconds=0)
-        if not ready:
+    def _get_gemini_client(self):
+        key = _gemini_key()
+        if not key:
             raise RuntimeError(
-                f"Local Qwen unavailable: {detail}. Run `ollama pull {self.ollama.model}` and start Ollama."
+                "GEMINI_API_KEY is missing from the project .env file. "
+                "Create a Google Gemini API key and set GEMINI_API_KEY locally; do not paste it into chat or commit it."
             )
-        self._active_provider = "ollama"
-        yield from self.ollama.chat_stream(
-            prompt,
-            max_tokens=max_tokens,
-            image_bytes_list=image_bytes_list,
-        )
+        if self._gemini_client is None or self._client_key != key:
+            self._gemini_client = genai.Client(api_key=key)
+            self._client_key = key
+        return self._gemini_client
 
-    def _kimi_stream(self, prompt, max_tokens, image_bytes_list=None):
-        self.kimi.reconfigure(api_key=os.environ.get("NVIDIA_API_KEY", "").strip())
-        if not self.kimi.available():
-            raise RuntimeError("NVIDIA_API_KEY is missing from the project .env file")
-        self._active_provider = "nvidia"
-        yield from self.kimi.chat_stream(
-            prompt,
-            max_tokens=max_tokens,
-            image_bytes_list=image_bytes_list,
-            system_prompt=SYSTEM_PROMPT,
-        )
-
-    @staticmethod
-    def _run_provider(name, factory, events):
+    def _generation_config(self, max_tokens):
+        kwargs = {
+            "system_instruction": SYSTEM_PROMPT,
+            "max_output_tokens": int(max_tokens),
+            "temperature": float(os.environ.get("GEMINI_TEMPERATURE", "0.15")),
+        }
+        # Gemini 2.5 Flash supports thinking. A zero budget is intentional here because
+        # the product requirement is immediate practice answers rather than long reasoning.
         try:
-            produced = False
-            for piece in factory():
-                if not piece:
-                    continue
-                produced = True
-                events.put((name, "chunk", piece))
-            events.put((name, "done", None if produced else "no answer tokens"))
-        except Exception as exc:
-            events.put((name, "error", exc))
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        except Exception:
+            pass
+        return types.GenerateContentConfig(**kwargs)
 
-    def _hybrid_stream(self, prompt, max_tokens, image_bytes_list=None):
-        if not self.kimi.available():
-            yield from self._qwen_stream(prompt, max_tokens, image_bytes_list)
-            return
+    def _gemini_stream(self, prompt, max_tokens, image_bytes_list=None):
+        client = self._get_gemini_client()
+        contents = []
+        for image_bytes in image_bytes_list or []:
+            if not image_bytes:
+                continue
+            contents.append(
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=_mime_type(image_bytes),
+                )
+            )
+        contents.append(str(prompt))
 
         started = time.monotonic()
-        events = queue.Queue()
-        errors = {}
-        done = set()
-        winner = None
-        qwen_started = False
-        hedge_seconds = max(
-            0.35,
-            min(4.0, float(os.environ.get("HYBRID_HEDGE_SECONDS", "1.25"))),
-        )
+        first = True
+        try:
+            response = client.models.generate_content_stream(
+                model=self.model,
+                contents=contents,
+                config=self._generation_config(max_tokens),
+            )
+            for chunk in response:
+                text = getattr(chunk, "text", None)
+                if not text:
+                    continue
+                if first:
+                    first = False
+                    mode = "vision" if image_bytes_list else "text"
+                    print(
+                        f"[gemini] First {mode} answer token in "
+                        f"{time.monotonic() - started:.2f}s · model={self.model}"
+                    )
+                yield text
+            if first:
+                raise RuntimeError("Gemini returned no answer text")
+        except Exception as exc:
+            raise RuntimeError(f"Gemini {self.model} request failed: {exc}") from exc
 
-        print(
-            f"[hybrid] Request started · visual={bool(image_bytes_list)} · "
-            f"Kimi head-start={hedge_seconds:.2f}s"
-        )
-        threading.Thread(
-            target=self._run_provider,
-            args=("kimi", lambda: self._kimi_stream(prompt, max_tokens, image_bytes_list), events),
-            daemon=True,
-            name="hybrid-kimi",
-        ).start()
-
-        while winner is None:
-            elapsed = time.monotonic() - started
-            if not qwen_started and elapsed >= hedge_seconds:
-                qwen_started = True
-                print("[hybrid] Kimi has no first token yet; starting local Qwen hedge.")
-                threading.Thread(
-                    target=self._run_provider,
-                    args=("qwen", lambda: self._qwen_stream(prompt, max_tokens, image_bytes_list), events),
-                    daemon=True,
-                    name="hybrid-qwen",
-                ).start()
-
-            try:
-                name, event_type, payload = events.get(timeout=0.05)
-            except queue.Empty:
-                continue
-
-            if event_type == "chunk":
-                winner = name
-                self._active_provider = "nvidia" if name == "kimi" else "ollama"
-                print(f"[hybrid] {name.upper()} won first token in {time.monotonic() - started:.2f}s")
-                yield payload
-                break
-            if event_type == "error":
-                errors[name] = payload
-                print(f"[hybrid] {name} failed before first token: {payload}")
-                if name == "kimi" and not qwen_started:
-                    qwen_started = True
-                    threading.Thread(
-                        target=self._run_provider,
-                        args=("qwen", lambda: self._qwen_stream(prompt, max_tokens, image_bytes_list), events),
-                        daemon=True,
-                        name="hybrid-qwen",
-                    ).start()
-            elif event_type == "done":
-                done.add(name)
-                if payload:
-                    errors[name] = RuntimeError(str(payload))
-
-            if qwen_started and len(errors) + len(done) >= 2 and winner is None:
-                details = "; ".join(f"{name}: {err}" for name, err in errors.items()) or "no provider produced output"
-                raise RuntimeError(f"Hybrid inference failed: {details}")
-
-        while True:
-            name, event_type, payload = events.get()
-            if name != winner:
-                continue
-            if event_type == "chunk":
-                yield payload
-            elif event_type == "done":
-                return
-            elif event_type == "error":
-                print(f"[hybrid] {winner} stream ended after partial output: {payload}")
-                return
+    @staticmethod
+    def _validate_visual_text(text):
+        cleaned = str(text or "").strip()
+        try:
+            configured_min = int(
+                os.environ.get("NVIDIA_VISION_MIN_USEFUL_CHARS", "32")
+            )
+        except Exception:
+            configured_min = 32
+        minimum = max(12, min(200, configured_min))
+        label_only = {
+            "mcq",
+            "coding",
+            "debug",
+            "debugging",
+            "general",
+            "image",
+            "screen",
+            "unknown",
+            "none",
+        }
+        if len(cleaned) < minimum or cleaned.lower().strip(" .:-") in label_only:
+            raise RuntimeError(
+                f"NVIDIA Omni extraction was too short to answer safely "
+                f"({len(cleaned)} chars; need at least {minimum})"
+            )
+        return cleaned
 
     def _route_stream(self, prompt, max_tokens, image_bytes_list=None):
-        self._reload_settings()
-        if self.provider_preference == "nvidia":
-            yield from self._kimi_stream(prompt, max_tokens, image_bytes_list)
-            return
-        if self.provider_preference == "ollama":
-            yield from self._qwen_stream(prompt, max_tokens, image_bytes_list)
-            return
-        yield from self._hybrid_stream(prompt, max_tokens, image_bytes_list)
+        # Compatibility hook for any legacy caller. Final generation is always Gemini.
+        yield from self._gemini_stream(
+            prompt,
+            max_tokens=max_tokens,
+            image_bytes_list=image_bytes_list,
+        )
 
     def generate_text_stream(self, custom_query=None):
+        self.set_config(provider="gemini")
         prompt = self._build_prompt(custom_query)
         max_tokens = int(os.environ.get("TEXT_MAX_TOKENS", "700"))
-        yield from self._route_stream(prompt, max_tokens=max_tokens)
+        print(
+            f"[pipeline] Parakeet transcript/chat -> Gemini 2.5 Flash · "
+            f"prompt_chars={len(prompt)}"
+        )
+        yield from self._gemini_stream(prompt, max_tokens=max_tokens)
 
-    def generate_vision_stream(self, image_bytes, custom_query=None, use_image_history=False):
+    def generate_vision_stream(
+        self,
+        image_bytes,
+        custom_query=None,
+        use_image_history=False,
+    ):
+        self.set_config(provider="gemini")
+        task = custom_query or (
+            "Solve or explain the current visible practice question. Give the useful answer first."
+        )
+        max_tokens = int(os.environ.get("VISION_MAX_TOKENS", "1000"))
+
         if use_image_history:
             self._remember_image(image_bytes)
-            frames = list(self.image_history)
-        else:
-            frames = [image_bytes]
 
-        image_task = (
-            "Read visible text/code carefully. Determine whether this is a coding problem, MCQ, debugging task, "
-            "terminal error, diagram, system-design prompt, conceptual question, document, or camera object. "
-            "Use all supplied frames as one chronological problem context when multiple frames are present. "
-            "Deduplicate overlap caused by scrolling. Do not guess missing constraints."
+        print(
+            f"[pipeline] Manual image -> NVIDIA Omni extraction · "
+            f"bytes={len(image_bytes or b'')}"
         )
-        prompt = self._build_prompt(
-            custom_query or "Solve or explain the current visible practice question. Give the useful answer first.",
-            image_task=image_task,
-        )
-        max_tokens = int(os.environ.get("VISION_MAX_TOKENS", "1200"))
-        yield from self._route_stream(prompt, max_tokens=max_tokens, image_bytes_list=frames)
+        try:
+            visual_text = self.omni_vision.extract(image_bytes, task_hint=task)
+            visual_text = self._validate_visual_text(visual_text)
+            prompt = (
+                "Solve the practice question from the NVIDIA-extracted screen text below. "
+                "Answer immediately; do not repeat the problem statement. For MCQ put the correct option "
+                "first. For coding give a short approach, complete correct code in the requested language, "
+                "then time and space complexity. For debugging state the defect and corrected code. "
+                "Do not invent missing visual details.\n\n"
+                f"USER TASK:\n{task}\n\n"
+                f"NVIDIA VISUAL EXTRACTION:\n{visual_text}"
+            )
+            print(
+                f"[pipeline] NVIDIA visual text -> Gemini 2.5 Flash · "
+                f"screen_chars={len(visual_text)} · prompt_chars={len(prompt)}"
+            )
+            yield from self._gemini_stream(prompt, max_tokens=max_tokens)
+            return
+        except Exception as exc:
+            print(f"[vision] NVIDIA extraction unusable/unavailable: {exc}")
+            print(
+                "[vision] Falling back to direct Gemini 2.5 Flash image analysis for this capture."
+            )
 
-    def generate_answer_stream(self, image_bytes=None, custom_query=None, use_image_history=False):
+        fallback_prompt = (
+            "Read the supplied practice screenshot carefully and answer the visible question immediately. "
+            "For MCQ put the correct option first. For coding give a short approach, complete correct code "
+            "in the requested language, then time and space complexity. For debugging identify the defect "
+            "and corrected code. Do not invent unreadable text.\n\n"
+            f"USER TASK:\n{task}"
+        )
+        yield from self._gemini_stream(
+            fallback_prompt,
+            max_tokens=max_tokens,
+            image_bytes_list=[image_bytes],
+        )
+
+    def generate_answer_stream(
+        self,
+        image_bytes=None,
+        custom_query=None,
+        use_image_history=False,
+    ):
         if not _practice_mode_enabled():
             yield (
                 "### Practice mode is off\n\n"
@@ -491,7 +391,12 @@ class CopilotAI:
         except Exception as exc:
             yield f"### AI Error\n\n`{exc}`"
 
-    def generate_answer(self, image_bytes=None, custom_query=None, use_image_history=False):
+    def generate_answer(
+        self,
+        image_bytes=None,
+        custom_query=None,
+        use_image_history=False,
+    ):
         return "".join(
             self.generate_answer_stream(
                 image_bytes=image_bytes,
