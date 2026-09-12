@@ -139,23 +139,16 @@ def main():
     window.raise_()
     window.activateWindow()
 
-    if (
-        window.settings.get("auto_start_listening", True)
-        and env_status["practice_mode"]
-        and env_status["nvidia_loaded"]
-    ):
-        QTimer.singleShot(250, window.toggle_recording)
-
-    print("[main] quntumnintent running.")
-    print("Audio: NVIDIA Parakeet CTC streaming ASR -> transcript.")
+    print("[main] quntumnintent running in manual-first mode.")
+    print("Listen: starts Parakeet microphone + system-audio transcription.")
+    print("Stop: stops microphone + system-audio transcription.")
+    print("Capture screen / Ctrl+Shift+S: captures one screenshot and answers it immediately.")
+    print("Send: answers the typed chat prompt using local Qwen.")
     print("Answers: local Qwen 3.5/Ollama only.")
-    print("Vision: NVIDIA Nemotron Omni image-to-text -> local Qwen answer.")
-    print("NVIDIA_API_KEY is loaded only from the project .env file.")
-    print("Live screen context is cached while listening; only screen-dependent spoken prompts attach it.")
-    print("Manual Capture/Camera always force image analysis.")
+    print("Vision: NVIDIA Nemotron Omni first; local Qwen vision fallback if NVIDIA is busy.")
+    print("No automatic listening and no background screenshot inference.")
     print("Candidate context: data/candidate_context.local.md (git-ignored local file).")
-    print("Ctrl+Shift+S: capture screen and answer.")
-    print("Ctrl+Shift+A: toggle microphone + system-audio listening.")
+    print("Ctrl+Shift+A: toggle Listen/Stop.")
     print("Camera button: analyze the latest live camera frame.")
     print("Ctrl+C in this console: quit cleanly.")
 
