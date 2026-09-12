@@ -2,13 +2,11 @@ import json
 import os
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".ai_interview_copilot_settings.json")
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_LOCAL_MODEL = "qwen3.5:4b"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 DEFAULT_SETTINGS = {
-    "ai_provider": "hybrid",  # Kimi K3 first, local Ollama fallback
-    "model": DEFAULT_GEMINI_MODEL,
+    "ai_provider": "hybrid",  # NVIDIA Kimi K3 first, local Qwen fallback
     "local_model": DEFAULT_LOCAL_MODEL,
     "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
     "ollama_num_ctx": 8192,
@@ -45,12 +43,7 @@ DEFAULT_SETTINGS = {
 
 def _normalize_provider(provider):
     provider = str(provider or "").strip().lower()
-    return provider if provider in {"auto", "hybrid", "nvidia", "ollama", "gemini"} else "hybrid"
-
-
-def _normalize_model(model):
-    model = str(model or "").strip()
-    return model if model.startswith("gemini-") else DEFAULT_GEMINI_MODEL
+    return provider if provider in {"hybrid", "nvidia", "ollama"} else "hybrid"
 
 
 def _normalize_local_model(model):
@@ -71,7 +64,6 @@ def load_settings():
             print(f"[config] Error loading settings: {exc}")
 
     settings["ai_provider"] = _normalize_provider(settings.get("ai_provider"))
-    settings["model"] = _normalize_model(settings.get("model"))
     settings["local_model"] = _normalize_local_model(settings.get("local_model"))
     settings["ollama_base_url"] = str(
         settings.get("ollama_base_url") or DEFAULT_OLLAMA_BASE_URL
@@ -87,7 +79,7 @@ def load_settings():
 
 
 def save_settings(settings):
-    """Persist runtime preferences only; API keys remain in project-local env files."""
+    """Persist runtime preferences only. NVIDIA_API_KEY stays in project .env."""
     try:
         clean_settings = DEFAULT_SETTINGS.copy()
         for key in clean_settings:
@@ -95,7 +87,6 @@ def save_settings(settings):
                 clean_settings[key] = settings[key]
 
         clean_settings["ai_provider"] = _normalize_provider(clean_settings.get("ai_provider"))
-        clean_settings["model"] = _normalize_model(clean_settings.get("model"))
         clean_settings["local_model"] = _normalize_local_model(
             clean_settings.get("local_model")
         )
