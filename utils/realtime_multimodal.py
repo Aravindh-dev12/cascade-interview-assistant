@@ -7,8 +7,6 @@ from PySide6.QtWidgets import QPushButton, QWidget
 import config
 from engine.audio_recorder import AudioRecorder, DEFAULT_SPEAKER_LOOPBACK_INDEX
 from engine.camera_capture import CameraCaptureController
-from engine.copilot_ai import SYSTEM_PROMPT
-from engine.nvidia_kimi import NvidiaKimiClient
 from engine.visual_context import combine_visual_context
 
 
@@ -34,7 +32,7 @@ def ensure_default_system_audio(window):
 
 
 def install_settings_device_compat():
-    """Expose the synthetic -2 default-speaker loopback in the older Settings UI."""
+    """Expose the synthetic -2 default-speaker loopback in Settings."""
     from ui.settings_dialog import SettingsDialog
 
     if getattr(SettingsDialog, "_default_loopback_compat_installed", False):
@@ -53,8 +51,7 @@ def install_settings_device_compat():
                 (
                     source
                     for source in loopbacks
-                    if int(source.get("index", -1))
-                    == DEFAULT_SPEAKER_LOOPBACK_INDEX
+                    if int(source.get("index", -1)) == DEFAULT_SPEAKER_LOOPBACK_INDEX
                 ),
                 None,
             )
@@ -74,149 +71,6 @@ def install_settings_device_compat():
 
     SettingsDialog._load_devices = load_devices
     SettingsDialog._default_loopback_compat_installed = True
-
-
-def install_local_provider_compat(window):
-    """Install Kimi K3 + local-Qwen routing behind the existing overlay queue.
-
-    Provider modes:
-      hybrid -> NVIDIA Kimi K3 first, local Ollama/Qwen fallback
-      nvidia -> NVIDIA Kimi K3 only
-      ollama -> local Ollama only
-      gemini -> Gemini only
-      auto   -> hybrid when an NVIDIA key exists, otherwise existing local-first logic
-
-    The older overlay checks ``get_effective_gemini_key`` as a generic AI-ready
-    gate. A sentinel keeps that legacy check satisfied for non-Gemini providers;
-    no sentinel is ever sent to NVIDIA or Gemini.
-    """
-
-    if getattr(window, "_hybrid_provider_installed", False):
-        return
-
-    original_key_getter = window.get_effective_gemini_key
-    original_stream = window.copilot_ai._local_or_fallback_stream
-    original_runtime_label = window.copilot_ai.runtime_label
-    kimi = NvidiaKimiClient()
-    window.nvidia_kimi = kimi
-
-    def actual_gemini_key():
-        return (
-            os.environ.get("GEMINI_API_KEY", "").strip()
-            or os.environ.get("GOOGLE_API_KEY", "").strip()
-        )
-
-    def nvidia_key():
-        return os.environ.get("NVIDIA_API_KEY", "").strip()
-
-    def requested_provider():
-        env_provider = os.environ.get("AI_PROVIDER", "").strip().lower()
-        provider = env_provider or str(
-            window.settings.get("ai_provider", "hybrid") or "hybrid"
-        ).strip().lower()
-        if provider not in {"auto", "hybrid", "nvidia", "ollama", "gemini"}:
-            provider = "hybrid"
-        if provider == "auto" and nvidia_key():
-            return "hybrid"
-        return provider
-
-    def compatible_key():
-        provider = requested_provider()
-        key = actual_gemini_key()
-        if provider in {"hybrid", "nvidia", "ollama"}:
-            return key or "__AI_PROVIDER_READY__"
-        return key or original_key_getter()
-
-    def qwen_stream(prompt, max_tokens, image_bytes_list=None):
-        ready, detail = window.copilot_ai.ollama.available()
-        if not ready:
-            raise RuntimeError(
-                f"Local Qwen fallback unavailable: {detail}. "
-                f"Run `ollama pull {window.copilot_ai.ollama.model}` and start Ollama."
-            )
-        yield from window.copilot_ai.ollama.chat_stream(
-            prompt,
-            max_tokens=max_tokens,
-            image_bytes_list=image_bytes_list,
-        )
-
-    def routed_stream(prompt, max_tokens, image_bytes_list=None):
-        provider = requested_provider()
-        if provider not in {"hybrid", "nvidia"}:
-            yield from original_stream(
-                prompt,
-                max_tokens=max_tokens,
-                image_bytes_list=image_bytes_list,
-            )
-            return
-
-        kimi.reconfigure(api_key=nvidia_key())
-        if kimi.available():
-            yielded = False
-            try:
-                window.copilot_ai._active_provider = "nvidia"
-                for piece in kimi.chat_stream(
-                    prompt,
-                    max_tokens=max_tokens,
-                    image_bytes_list=image_bytes_list,
-                    system_prompt=SYSTEM_PROMPT,
-                ):
-                    yielded = True
-                    yield piece
-                if yielded:
-                    return
-            except Exception as exc:
-                if provider == "nvidia":
-                    raise RuntimeError(f"NVIDIA Kimi K3 request failed: {exc}") from exc
-                if yielded:
-                    print(f"[nvidia-kimi] Stream interrupted after output began: {exc}")
-                    return
-                print(f"[nvidia-kimi] Fast cloud path unavailable; falling back to Qwen: {exc}")
-        elif provider == "nvidia":
-            raise RuntimeError(
-                "NVIDIA_API_KEY is missing. Rotate the exposed key and put the new key in the project .env file."
-            )
-
-        window.copilot_ai._active_provider = "ollama"
-        try:
-            yield from qwen_stream(
-                prompt,
-                max_tokens=max_tokens,
-                image_bytes_list=image_bytes_list,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Hybrid AI failed: Kimi K3 was unavailable and local Qwen fallback failed: "
-                f"{exc}"
-            ) from exc
-
-    def configure_ai():
-        provider = requested_provider()
-        kimi.reconfigure(api_key=nvidia_key())
-        underlying_provider = "ollama" if provider in {"hybrid", "nvidia"} else provider
-        window.copilot_ai.set_config(
-            provider=underlying_provider,
-            model=window.settings.get("model", config.DEFAULT_GEMINI_MODEL),
-            api_key=actual_gemini_key(),
-        )
-        window.copilot_ai._requested_provider = provider
-
-    def runtime_label():
-        provider = requested_provider()
-        if provider == "nvidia":
-            return f"NVIDIA · {kimi.model}"
-        if provider == "hybrid":
-            ready, _, _ = window.copilot_ai.ollama.cached_available()
-            fallback = window.copilot_ai.ollama.model if ready else "Qwen fallback"
-            return f"HYBRID · Kimi K3 → {fallback}"
-        return original_runtime_label()
-
-    window.get_effective_gemini_key = compatible_key
-    window._configure_gemini = configure_ai
-    window.copilot_ai._local_or_fallback_stream = routed_stream
-    window.copilot_ai.runtime_label = runtime_label
-    window._hybrid_provider_installed = True
-    configure_ai()
 
 
 class CameraVisionControls(QObject):
