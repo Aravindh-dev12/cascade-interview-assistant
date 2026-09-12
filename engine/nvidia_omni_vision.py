@@ -13,9 +13,10 @@ DEFAULT_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 class NvidiaOmniVisionClient:
     """NVIDIA Nemotron Omni image-to-text client.
 
-    The NVIDIA API key is read only from the environment. This client is used to
-    turn a screen/camera frame into compact text context; local Qwen produces the
-    final interview answer.
+    The NVIDIA API key is read only from the environment. This client turns a
+    manually captured screen/camera frame into compact text context; local Qwen
+    produces the final answer. Transient hosted-worker saturation is retried a
+    few times before the caller falls back to local Qwen vision.
     """
 
     def __init__(self, api_key=None, base_url=None, model=None):
@@ -102,6 +103,36 @@ class NvidiaOmniVisionClient:
         except TimeoutError as exc:
             raise RuntimeError("NVIDIA Omni vision request timed out") from exc
 
+    @staticmethod
+    def _is_transient_overload(exc):
+        text = str(exc).lower()
+        return (
+            "http 503" in text
+            or "resourceexhausted" in text
+            or "service unavailable" in text
+            or "worker local total request limit reached" in text
+        )
+
+    def _open_json_with_retry(self, request, timeout, purpose="request"):
+        retries = max(0, min(6, int(os.environ.get("NVIDIA_VISION_503_RETRIES", "3"))))
+        base_delay = max(
+            0.2,
+            min(5.0, float(os.environ.get("NVIDIA_VISION_503_RETRY_DELAY_SECONDS", "0.8"))),
+        )
+        for attempt in range(retries + 1):
+            try:
+                return self._open_json(request, timeout=timeout)
+            except Exception as exc:
+                if not self._is_transient_overload(exc) or attempt >= retries:
+                    raise
+                delay = min(5.0, base_delay * (2 ** attempt))
+                print(
+                    f"[vision-nvidia] Hosted worker busy during {purpose}; "
+                    f"retry {attempt + 1}/{retries} in {delay:.1f}s"
+                )
+                time.sleep(delay)
+        raise RuntimeError("NVIDIA Omni vision retry loop exhausted")
+
     def _poll(self, request_id, deadline):
         poll_seconds = max(
             0.2,
@@ -114,7 +145,11 @@ class NvidiaOmniVisionClient:
                 method="GET",
             )
             remaining = max(1.0, deadline - time.monotonic())
-            status, payload = self._open_json(request, timeout=min(10.0, remaining))
+            status, payload = self._open_json_with_retry(
+                request,
+                timeout=min(10.0, remaining),
+                purpose="polling",
+            )
             if status == 200:
                 return payload
             if status != 202:
@@ -142,7 +177,7 @@ class NvidiaOmniVisionClient:
             "unreadable content. Keep the output compact and factual; do not solve the problem."
         )
         if task_hint:
-            prompt += f"\nThe spoken/user task is: {task_hint}"
+            prompt += f"\nThe user task is: {task_hint}"
 
         payload = {
             "messages": [
@@ -182,7 +217,11 @@ class NvidiaOmniVisionClient:
             method="POST",
         )
         started = time.monotonic()
-        status, response_payload = self._open_json(request, timeout=timeout)
+        status, response_payload = self._open_json_with_retry(
+            request,
+            timeout=timeout,
+            purpose="image extraction",
+        )
         if status == 202:
             request_id = (
                 response_payload.get("requestId")
