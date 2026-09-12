@@ -12,11 +12,10 @@ def _env_enabled(name, default=True):
 def install_visual_autopilot():
     """Make fresh screen/camera context participate automatically in practice answers.
 
-    The base overlay historically analyzed stable screen frames only while listening
-    was stopped and attached visuals to speech only when a small keyword heuristic
-    matched. Real ASR often omits words/punctuation, so visible MCQs/coding questions
-    could be captured but never sent to Kimi/Qwen. This patch keeps the existing
-    queue/scheduling while making visual context proactive and observable.
+    Stable screen frames can be answered while listening, and fresh visuals can be
+    attached to substantive interviewer questions. Automatic screen answers use only
+    the current frame so MCQ/coding latency does not grow as image history accumulates.
+    Manual captures can still use image history for scrolling/multi-frame context.
     """
     from ui import overlay_window as overlay_module
     from ui.settings_dialog import SettingsDialog
@@ -37,9 +36,6 @@ def install_visual_autopilot():
             return True
         return original_should_attach(text)
 
-    # The existing overlay already enforces freshness with screen_context_max_age_seconds.
-    # Making this predicate true causes fresh SCREEN/CAMERA context to accompany every
-    # substantive interviewer question without changing the queue implementation.
     overlay_module.should_attach_screen = should_attach_visual
 
     def handle_transcription(window, speaker, text):
@@ -82,7 +78,7 @@ def install_visual_autopilot():
         mode = "while listening" if window.audio_recorder.is_recording else "screen-only"
         print(
             f"[vision] Stable screen frame -> AI · {mode} · "
-            f"bytes={len(image_bytes)}"
+            f"bytes={len(image_bytes)} · frames=1"
         )
         window._enqueue_ai(
             source="Visible question",
@@ -96,7 +92,7 @@ def install_visual_autopilot():
                 "If it is a conceptual, system-design, diagram, terminal, SQL, or output question, answer directly. "
                 "If no actual question is visible, do not invent one; reply only NO_QUESTION_VISIBLE."
             ),
-            use_image_history=True,
+            use_image_history=False,
         )
 
     def submit_screen_capture(window, image_bytes, source="Manual screen capture"):
@@ -118,9 +114,6 @@ def install_visual_autopilot():
 
     def camera_init(controller, window):
         original_camera_init(controller, window)
-        # Recover a screen frame that may have been emitted just before the camera
-        # bridge connected during startup, so later camera frames create SCREEN+CAMERA
-        # context instead of accidentally replacing the visible screen with camera-only.
         if window.latest_screen_bytes and not controller.latest_screen_bytes:
             controller.latest_screen_bytes = window.latest_screen_bytes
             controller.latest_screen_time = window.latest_screen_time
