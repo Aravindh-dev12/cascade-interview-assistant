@@ -20,8 +20,8 @@ def install_local_qwen_pipeline():
 
     Audio path: Parakeet/Riva -> transcript -> local Qwen -> overlay.
     Visual path: manual screen/camera -> NVIDIA Nemotron Omni image-to-text -> local Qwen.
-    If NVIDIA vision is busy/unavailable, the same manual image falls back directly to
-    Qwen vision instead of ending the request with a cloud-service error.
+    If NVIDIA vision is busy, unavailable, or returns an unusably short extraction, the
+    same manual image falls back directly to Qwen vision instead of ending the request.
     """
     from engine import copilot_ai as ai_module
     from PySide6.QtWidgets import QLabel
@@ -31,8 +31,7 @@ def install_local_qwen_pipeline():
     if getattr(CopilotAI, "_local_qwen_pipeline_installed", False):
         return
 
-    # Automatic screenshot inference is gone, so warming the local model no longer
-    # races a startup vision request. Keep Qwen ready for Listen/Send/Capture actions.
+    # Manual-first mode has no startup screenshot inference, so pre-warm Qwen.
     os.environ["OLLAMA_WARMUP"] = "1"
 
     original_init = CopilotAI.__init__
@@ -44,6 +43,8 @@ def install_local_qwen_pipeline():
         ai.omni_vision = NvidiaOmniVisionClient(
             api_key=os.environ.get("NVIDIA_API_KEY", "")
         )
+        ai._qwen_prepare_lock = threading.Lock()
+        ai._qwen_ready_for_answers = False
         print(
             f"[pipeline] Final answer engine: local {ai.ollama.model}; "
             f"vision extractor: {ai.omni_vision.model}"
@@ -60,11 +61,15 @@ def install_local_qwen_pipeline():
         num_ctx = int(
             os.environ.get("OLLAMA_NUM_CTX", settings.get("ollama_num_ctx", 8192))
         )
+        previous = (ai.ollama.base_url, ai.ollama.model, ai.ollama.num_ctx)
         ai.ollama.reconfigure(
             base_url=base_url,
             model=local_model,
             num_ctx=num_ctx,
         )
+        current = (ai.ollama.base_url, ai.ollama.model, ai.ollama.num_ctx)
+        if previous != current:
+            ai._qwen_ready_for_answers = False
         ai.provider_preference = "ollama"
         if not hasattr(ai, "omni_vision"):
             ai.omni_vision = NvidiaOmniVisionClient()
@@ -78,7 +83,69 @@ def install_local_qwen_pipeline():
         state = ai.ollama.model if ready else f"loading/checking {ai.ollama.model}"
         return f"LOCAL · {state} · NVIDIA vision + local vision fallback"
 
+    def ensure_qwen_ready(ai):
+        """Verify the configured model exists and synchronously prepare it before use."""
+        ready, detail = ai.ollama.available(cache_seconds=0)
+        if not ready:
+            raise RuntimeError(
+                f"Local Qwen model `{ai.ollama.model}` is not installed/available: {detail}. "
+                f"Run `ollama pull {ai.ollama.model}` and then retry."
+            )
+
+        lock = getattr(ai, "_qwen_prepare_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            ai._qwen_prepare_lock = lock
+
+        with lock:
+            if getattr(ai, "_qwen_ready_for_answers", False):
+                return
+
+            # The normal startup warmup may already have completed; a second tiny one-token
+            # warmup is harmless and guarantees the first real request is not the cold load.
+            print(f"[ollama] Preparing local model before answer: {ai.ollama.model}")
+            if not ai.ollama.warmup():
+                ready, detail = ai.ollama.available(cache_seconds=0)
+                if not ready:
+                    raise RuntimeError(
+                        f"Local Qwen model `{ai.ollama.model}` could not be prepared: {detail}. "
+                        f"Run `ollama pull {ai.ollama.model}` and verify Ollama is running."
+                    )
+                raise RuntimeError(
+                    f"Local Qwen model `{ai.ollama.model}` is installed but warmup failed. "
+                    "Run `ollama run qwen3.5:4b \"Reply only READY\"` once and inspect `ollama ps`."
+                )
+            ai._qwen_ready_for_answers = True
+
+    def validate_visual_text(text):
+        cleaned = str(text or "").strip()
+        try:
+            configured_min = int(os.environ.get("NVIDIA_VISION_MIN_USEFUL_CHARS", "32"))
+        except Exception:
+            configured_min = 32
+        minimum = max(12, min(200, configured_min))
+        label_only = {
+            "mcq",
+            "coding",
+            "debug",
+            "debugging",
+            "general",
+            "image",
+            "screen",
+            "unknown",
+            "none",
+        }
+        if len(cleaned) < minimum or cleaned.lower().strip(" .:-") in label_only:
+            raise RuntimeError(
+                f"NVIDIA Omni extraction was too short to answer safely "
+                f"({len(cleaned)} chars; need at least {minimum})."
+            )
+        return cleaned
+
     def bounded_qwen_stream(ai, prompt, max_tokens, image_bytes_list=None):
+        # Do this before the answer thread starts. If Ollama/model setup is the problem,
+        # the UI gets a concrete error instead of appearing to do nothing for a minute.
+        ensure_qwen_ready(ai)
         events = queue.Queue()
 
         def run():
@@ -104,9 +171,8 @@ def install_local_qwen_pipeline():
         ).start()
 
         if image_bytes_list:
-            # Clamp old .env values so a previous 20s timeout cannot break manual vision.
             first_timeout = _float_env(
-                "LOCAL_QWEN_VISION_FIRST_TOKEN_TIMEOUT_SECONDS", 60.0, 60.0, 180.0
+                "LOCAL_QWEN_VISION_FIRST_TOKEN_TIMEOUT_SECONDS", 120.0, 90.0, 240.0
             )
         else:
             first_timeout = _float_env(
@@ -127,7 +193,7 @@ def install_local_qwen_pipeline():
                 )
                 raise RuntimeError(
                     f"Local Qwen {phase} timeout after {timeout:.1f}s. "
-                    "Run `ollama ps` to verify qwen3.5:4b is loaded."
+                    "Run `ollama ps` while this request is active and inspect PROCESSOR."
                 )
             if event_type == "chunk":
                 if first:
@@ -174,19 +240,18 @@ def install_local_qwen_pipeline():
         )
         try:
             visual_text = ai.omni_vision.extract(image_bytes, task_hint=task)
+            visual_text = validate_visual_text(visual_text)
         except Exception as exc:
-            # Hosted vision can transiently return 503/429. A manual Capture action
-            # should still produce an answer, so fall back to Qwen's image capability.
-            print(f"[vision] NVIDIA extraction unavailable: {exc}")
-            print("[vision] Falling back to local Qwen image analysis for this capture.")
+            print(f"[vision] NVIDIA extraction unusable/unavailable: {exc}")
+            print("[vision] Falling back to local Qwen image analysis using the original screenshot.")
             fallback_prompt = ai._build_prompt(
                 task,
                 image_task=(
                     "Read the supplied screenshot carefully. Detect whether it contains an MCQ, coding "
                     "problem, debugging task, terminal/output question, SQL, diagram, system-design prompt, "
-                    "or general question. For MCQ give the option first; for coding give approach, correct "
-                    "code, and complexity; otherwise answer the visible question directly. Do not invent "
-                    "text that is not readable."
+                    "or general question. For an MCQ give the correct option first; for coding give the "
+                    "approach, correct code, and complexity; otherwise answer the visible question directly. "
+                    "Do not invent text that is not readable."
                 ),
             )
             yield from bounded_qwen_stream(
@@ -219,6 +284,7 @@ def install_local_qwen_pipeline():
                     image_bytes_list[-1],
                     task_hint="Use the current visual context to answer the request.",
                 )
+                visual_text = validate_visual_text(visual_text)
                 prompt = (
                     prompt
                     + "\n\nNVIDIA NEMOTRON OMNI VISUAL EXTRACTION:\n"
@@ -226,7 +292,10 @@ def install_local_qwen_pipeline():
                 )
                 image_bytes_list = None
             except Exception as exc:
-                print(f"[vision] NVIDIA compatibility extraction failed: {exc}; using local vision.")
+                print(
+                    f"[vision] NVIDIA compatibility extraction unusable/unavailable: {exc}; "
+                    "using local vision."
+                )
         yield from bounded_qwen_stream(
             ai,
             prompt,
