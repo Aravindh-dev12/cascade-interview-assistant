@@ -16,6 +16,7 @@ from ui.overlay_window import OverlayWindow
 from utils.audio_device_monitor import AudioDeviceMonitor
 from utils.camera_device_monitor import CameraDeviceMonitor
 from utils.candidate_context import install_candidate_context
+from utils.light_glass_theme import apply_light_glass, install_light_glass_theme
 from utils.mouse_passthrough import MousePassthroughController
 from utils.parakeet_runtime import install_parakeet_runtime
 from utils.realtime_multimodal import (
@@ -74,6 +75,7 @@ def main():
     install_audio_device_recovery()
     install_visual_autopilot()
     install_candidate_context()
+    install_light_glass_theme()
     install_parakeet_runtime()
 
     print(f"[env] project dir: {PROJECT_DIR}")
@@ -102,6 +104,7 @@ def main():
     window = OverlayWindow()
     ensure_default_system_audio(window)
     window.show()
+    apply_light_glass(window)
 
     screen_capture_controls = ScreenCaptureControls(window)
     window.screen_capture_controls = screen_capture_controls
@@ -142,7 +145,8 @@ def main():
     print("Answers: Google Gemini 2.5 Flash only; no Ollama/local model.")
     print("Vision: NVIDIA Nemotron Omni first; direct Gemini image fallback if NVIDIA vision is unavailable.")
     print("No automatic listening and no background screenshot inference.")
-    print("Candidate context: data/candidate_context.local.md (git-ignored local file).")
+    print("Private candidate/project context: encrypted local store outside the repository.")
+    print("UI: white acrylic/frosted-glass appearance only; no monitoring or capture-evasion behavior.")
     print("Ctrl+Shift+A: toggle Listen/Stop.")
     print("Camera button: analyze the latest live camera frame.")
     print("Ctrl+C in this console: quit cleanly.")
