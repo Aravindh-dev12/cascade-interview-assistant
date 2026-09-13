@@ -9,6 +9,12 @@ env
 /data/candidate_context.local.md
 /data/candidate_context.local.txt
 /data/candidate_context.local.json
+/data/candidate_projects.local.md
+/data/candidate_projects.local.txt
+/data/candidate_projects.local.json
+/data/*.local.db
+/data/*.local.db-shm
+/data/*.local.db-wal
 
 # Python
 __pycache__/
