@@ -46,12 +46,12 @@ class SettingsDialog(QDialog):
 
     def _apply_style(self):
         self.setStyleSheet("""
-            QDialog { background:#070B12; color:#E7EEF8; font-family:'Segoe UI',Arial; font-size:13px; }
+            QDialog { background:rgba(7,11,18,95); color:#E7EEF8; font-family:'Segoe UI',Arial; font-size:13px; }
             QLabel { color:#C9D5E5; }
             QLabel#title { color:white; font-size:20px; font-weight:700; }
             QLabel#muted { color:#75859B; font-size:11px; }
-            QFrame#card { background:#0C1420; border:1px solid #1F2C3E; border-radius:10px; }
-            QComboBox, QSpinBox, QLineEdit { min-height:34px; background:#111B2A; color:#F8FAFC; border:1px solid #2A3A50; border-radius:7px; padding:0 8px; }
+            QFrame#card { background:rgba(12,20,32,105); border:1px solid rgba(148,163,184,90); border-radius:10px; }
+            QComboBox, QSpinBox, QLineEdit { min-height:34px; background:rgba(17,27,42,105); color:#F8FAFC; border:1px solid #2A3A50; border-radius:7px; padding:0 8px; }
             QCheckBox { color:#CAD5E3; spacing:8px; }
             QSlider::groove:horizontal { height:4px; background:#2A3A50; border-radius:2px; }
             QSlider::sub-page:horizontal { background:#3B82F6; }
@@ -64,7 +64,7 @@ class SettingsDialog(QDialog):
             QScrollBar:vertical { background:transparent; width:7px; }
             QScrollBar::handle:vertical { background:#334155; border-radius:3px; min-height:28px; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-            QToolTip { background:transparent; color:transparent; border:none; }
+            QToolTip { background:rgba(7,11,18,150); color:#E7EEF8; border:1px solid rgba(148,163,184,80); }
         """)
 
     def _card(self, title, subtitle=None):
