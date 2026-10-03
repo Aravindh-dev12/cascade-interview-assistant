@@ -328,7 +328,8 @@ class OverlayWindow(QWidget):
     def update_ui_stylesheet(self):
         # Keep the overlay visually opaque so the desktop does not bleed through the panel.
         # The setting is retained for compatibility, but the panel uses fixed opaque surfaces.
-        opacity = max(0.55, min(1.0, float(self.settings.get("window_opacity", 0.94))))\n        font_size = max(11, int(self.settings.get("font_size", 13)))
+        opacity = max(0.55, min(1.0, float(self.settings.get("window_opacity", 0.94))))
+        font_size = max(11, int(self.settings.get("font_size", 13)))
         self.setStyleSheet(f"""
             QWidget {{ font-family:'Segoe UI Variable Text','Segoe UI',Arial,sans-serif; color:#E8EEF8; font-size:13px; }}
             QFrame#container {{ background:rgb(7,11,18); border:1px solid rgba(148,163,184,105); border-radius:14px; }}
