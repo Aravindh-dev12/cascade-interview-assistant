@@ -326,22 +326,20 @@ class OverlayWindow(QWidget):
         self._set_status("IDLE")
 
     def update_ui_stylesheet(self):
-        opacity = max(0.55, min(1.0, float(self.settings.get("window_opacity", 0.94))))
-        alpha = int(opacity * 255)
-        font_size = max(11, int(self.settings.get("font_size", 13)))
+        # Keep the overlay visually opaque so the desktop does not bleed through the panel.\n        # The setting is retained for compatibility, but the panel uses fixed opaque surfaces.\n        opacity = max(0.55, min(1.0, float(self.settings.get("window_opacity", 0.94))))\n        font_size = max(11, int(self.settings.get("font_size", 13)))
         self.setStyleSheet(f"""
             QWidget {{ font-family:'Segoe UI Variable Text','Segoe UI',Arial,sans-serif; color:#E8EEF8; font-size:13px; }}
-            QFrame#container {{ background:rgba(7,11,18,90); border:1px solid rgba(148,163,184,105); border-radius:14px; }}
-            QWidget#titleBar {{ background:rgba(10,16,27,105); border-bottom:1px solid rgba(51,65,85,170); border-top-left-radius:14px; border-top-right-radius:14px; }}
-            QWidget#body {{ background:transparent; }}
+            QFrame#container {{ background:rgb(7,11,18); border:1px solid rgba(148,163,184,105); border-radius:14px; }}
+            QWidget#titleBar {{ background:rgb(10,16,27); border-bottom:1px solid rgba(51,65,85,170); border-top-left-radius:14px; border-top-right-radius:14px; }}
+            QWidget#body {{ background:rgb(7,11,18); }}
             QLabel#brandMark {{ background:#2563EB; color:white; border-radius:9px; font-weight:800; }}
             QLabel#brandTitle {{ color:#F8FAFC; font-size:14px; font-weight:750; }}
             QLabel#brandSubtitle, QLabel#muted {{ color:#718096; font-size:10px; }}
             QLabel#eyebrow {{ color:#93A4BA; font-size:10px; font-weight:800; }}
-            QFrame#card, QFrame#composer {{ background:rgba(15,23,42,105); border:1px solid rgba(148,163,184,90); border-radius:10px; }}
+            QFrame#card, QFrame#composer {{ background:rgb(15,23,42); border:1px solid rgba(148,163,184,90); border-radius:10px; }}
             QTextBrowser#answerDisplay {{ background:transparent; border:none; color:#E8EEF8; padding:13px; font-size:{font_size}px; }}
             QTextBrowser#transcriptDisplay {{ background:transparent; border:none; color:#B7C4D5; font-size:11px; }}
-            QLabel#partialTranscript {{ color:#BFDBFE; background:rgba(30,64,175,75); border:1px solid rgba(59,130,246,105); border-radius:7px; padding:6px 8px; font-size:11px; }}
+            QLabel#partialTranscript {{ color:#BFDBFE; background:rgb(30,64,175); border:1px solid rgba(59,130,246,105); border-radius:7px; padding:6px 8px; font-size:11px; }}
             QLineEdit#promptInput {{ background:transparent; border:none; color:#F8FAFC; padding:7px 3px; }}
             QPushButton {{ min-height:32px; border-radius:7px; padding:0 11px; font-weight:650; }}
             QPushButton#primaryButton {{ background:#2563EB; color:white; border:1px solid #3B82F6; }}
