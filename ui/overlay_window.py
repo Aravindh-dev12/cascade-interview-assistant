@@ -331,15 +331,14 @@ class OverlayWindow(QWidget):
         self._set_status("IDLE")
 
     def update_ui_stylesheet(self):
-        # Keep the overlay visually opaque so the desktop does not bleed through the panel.
-        # The setting is retained for compatibility, but the panel uses fixed opaque surfaces.
+        # Full transparent glassmorphism: alpha is intentional on every panel.
         opacity = max(0.55, min(1.0, float(self.settings.get("window_opacity", 0.94))))
         font_size = max(11, int(self.settings.get("font_size", 13)))
         self.setStyleSheet(f"""
             QWidget {{ font-family:'Segoe UI Variable Text','Segoe UI',Arial,sans-serif; color:#E8EEF8; font-size:13px; background:transparent; }}
             QFrame#container {{ background:rgba(12,18,30,145); border:1px solid rgba(148,163,184,120); border-radius:14px; }}
             QWidget#titleBar {{ background:rgba(15,23,42,150); border-bottom:1px solid rgba(51,65,85,170); border-top-left-radius:14px; border-top-right-radius:14px; }}
-            QWidget#body {{ background:rgba(7,11,18,115);
+            QWidget#body {{ background:rgba(7,11,18,115); }}
             QLabel#brandMark {{ background:#2563EB; color:white; border-radius:9px; font-weight:800; }}
             QLabel#brandTitle {{ color:#F8FAFC; font-size:14px; font-weight:750; }}
             QLabel#brandSubtitle, QLabel#muted {{ color:#718096; font-size:10px; }}
