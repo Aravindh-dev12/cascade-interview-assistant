@@ -96,7 +96,9 @@ class OverlayWindow(QWidget):
         self.last_interviewer_time = 0.0
 
         self._apply_window_flags()
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # Use a real opaque top-level window. Transparency here causes the desktop/default
+        # window surface to show through around the rounded container.
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
         self.setMinimumSize(470, 520)
         self.resize(560, 750)
         self.init_ui()
@@ -331,7 +333,7 @@ class OverlayWindow(QWidget):
         opacity = max(0.55, min(1.0, float(self.settings.get("window_opacity", 0.94))))
         font_size = max(11, int(self.settings.get("font_size", 13)))
         self.setStyleSheet(f"""
-            QWidget {{ font-family:'Segoe UI Variable Text','Segoe UI',Arial,sans-serif; color:#E8EEF8; font-size:13px; }}
+            QWidget {{ font-family:'Segoe UI Variable Text','Segoe UI',Arial,sans-serif; color:#E8EEF8; font-size:13px; background:rgb(7,11,18); }}
             QFrame#container {{ background:rgb(7,11,18); border:1px solid rgba(148,163,184,105); border-radius:14px; }}
             QWidget#titleBar {{ background:rgb(10,16,27); border-bottom:1px solid rgba(51,65,85,170); border-top-left-radius:14px; border-top-right-radius:14px; }}
             QWidget#body {{ background:rgb(7,11,18); }}
@@ -340,10 +342,10 @@ class OverlayWindow(QWidget):
             QLabel#brandSubtitle, QLabel#muted {{ color:#718096; font-size:10px; }}
             QLabel#eyebrow {{ color:#93A4BA; font-size:10px; font-weight:800; }}
             QFrame#card, QFrame#composer {{ background:rgb(15,23,42); border:1px solid rgba(148,163,184,90); border-radius:10px; }}
-            QTextBrowser#answerDisplay {{ background:transparent; border:none; color:#E8EEF8; padding:13px; font-size:{font_size}px; }}
-            QTextBrowser#transcriptDisplay {{ background:transparent; border:none; color:#B7C4D5; font-size:11px; }}
+            QTextBrowser#answerDisplay {{ background:rgb(15,23,42); border:none; color:#E8EEF8; padding:13px; font-size:{font_size}px; }}
+            QTextBrowser#transcriptDisplay {{ background:rgb(15,23,42); border:none; color:#B7C4D5; font-size:11px; }}
             QLabel#partialTranscript {{ color:#BFDBFE; background:rgb(30,64,175); border:1px solid rgba(59,130,246,105); border-radius:7px; padding:6px 8px; font-size:11px; }}
-            QLineEdit#promptInput {{ background:transparent; border:none; color:#F8FAFC; padding:7px 3px; }}
+            QLineEdit#promptInput {{ background:rgb(15,23,42); border:none; color:#F8FAFC; padding:7px 3px; }}
             QPushButton {{ min-height:32px; border-radius:7px; padding:0 11px; font-weight:650; }}
             QPushButton#primaryButton {{ background:#2563EB; color:white; border:1px solid #3B82F6; }}
             QPushButton#recordBtn {{ background:rgba(248,250,252,32); color:#E8EEF8; border:1px solid rgba(226,232,240,95); min-width:78px; }}
